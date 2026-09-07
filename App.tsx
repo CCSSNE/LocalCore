@@ -850,11 +850,11 @@ export default function App() {
           );
         })}
         {typing ? (
-          <View style={[styles.bubble, styles.bubbleAi]}>
-            <ActivityIndicator />
-            <Text style={styles.bubbleAiText}>
+          <View style={[styles.bubble, styles.bubbleAi, styles.typingRow]}>
+            <Text style={[styles.bubbleAiText, styles.typingText]}>
               {progressMsg || (stageMsg && stageMsg !== '核心推理开始' ? stageMsg : '正在准备输入…')}
             </Text>
+            <ActivityIndicator style={styles.typingSpinner} size="small" />
           </View>
         ) : null}
       </ScrollView>
@@ -1472,6 +1472,9 @@ const styles = StyleSheet.create({
   bubbleError: {backgroundColor: '#fdecea', alignSelf: 'flex-start', borderWidth: 1, borderColor: '#b00020'},
   bubbleAiText: {color: '#111111'},
   bubbleUserText: {color: '#ffffff'},
+  typingRow: {flexDirection: 'row', alignItems: 'center'},
+  typingText: {flexShrink: 1},
+  typingSpinner: {marginLeft: 8},
   userRow: {flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'flex-end', marginBottom: 8},
   userContent: {flexShrink: 1, maxWidth: '85%', alignItems: 'flex-end'},
   bubbleUserInRow: {alignSelf: 'flex-end', maxWidth: '100%', marginBottom: 4},
@@ -1489,7 +1492,17 @@ const styles = StyleSheet.create({
     marginRight: 6,
   },
   retryBtnDisabled: {opacity: 0.4},
-  retryText: {fontSize: 13, lineHeight: 15, color: '#666666', textAlign: 'center', includeFontPadding: false},
+  retryText: {
+    fontSize: 13,
+    lineHeight: 14,
+    padding: 0,
+    margin: 0,
+    color: '#666666',
+    textAlign: 'center',
+    textAlignVertical: 'center',
+    includeFontPadding: false,
+    transform: [{translateY: -1}],
+  },
   sentStrip: {flexDirection: 'row', flexWrap: 'wrap', marginBottom: 8, alignSelf: 'flex-end', justifyContent: 'flex-end'},
   thumbSmall: {width: 72, height: 72, borderRadius: 10, marginLeft: 6, marginBottom: 6},
   statsBox: {backgroundColor: '#f4f4f4', borderRadius: 8, padding: 8, marginBottom: 8, alignSelf: 'flex-start', maxWidth: '85%'},
