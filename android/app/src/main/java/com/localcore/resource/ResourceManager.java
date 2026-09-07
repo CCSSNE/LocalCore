@@ -41,6 +41,10 @@ public final class ResourceManager {
         void onResourceState(ResourceState state);
     }
 
+    public interface InstallListener {
+        void onInstalled(File file) throws Exception;
+    }
+
     private final ConfigRepository config;
     private final EventLog events;
     private final File root;
@@ -60,6 +64,7 @@ public final class ResourceManager {
         ensureDirectory(downloads);
         loadStates();
         reconcile();
+        config.addListener(ignored -> reconcile());
     }
 
     public synchronized List<ResourceState> states() {
@@ -68,17 +73,18 @@ public final class ResourceManager {
         for (int i = 0; i < resources.length(); i++) {
             JSONObject descriptor = resources.optJSONObject(i);
             String id = descriptor.optString("id");
-            ResourceState state = states.get(id);
-            if (state == null) state = missing(descriptor);
-            result.add(state);
+            result.add(present(descriptor, states.get(id)));
         }
         return result;
     }
 
     public synchronized ResourceState state(String id) {
         JSONObject descriptor = descriptor(id);
-        ResourceState state = states.get(id);
-        return state == null ? missing(descriptor) : state;
+        return present(descriptor, states.get(id));
+    }
+
+    public synchronized ResourceState knownState(String id) {
+        return states.get(id);
     }
 
     public File installedFile(String id) {
@@ -87,10 +93,8 @@ public final class ResourceManager {
         synchronized (this) {
             state = states.get(id);
         }
-        String expectedVersion = descriptor.optString("version");
-        if (state == null || state.status != ResourceState.Status.INSTALLED
-                || !expectedVersion.equals(state.version) || state.path == null) {
-            throw new IllegalStateException("资源尚未安装当前版本: " + id + "@" + expectedVersion);
+        if (state == null || !state.usable()) {
+            throw new IllegalStateException("资源没有可用的已激活版本: " + id);
         }
         File file = new File(state.path);
         if (!file.isFile()) {
@@ -100,7 +104,18 @@ public final class ResourceManager {
     }
 
     public void install(String id) {
-        JSONObject descriptor = descriptor(id);
+        installDescriptor(descriptor(id), null);
+    }
+
+    public void installConfiguration(JSONObject descriptor, InstallListener listener) {
+        if (!"config".equals(descriptor.optString("type"))) {
+            throw new IllegalArgumentException("外部更新入口只接受 config 资源");
+        }
+        installDescriptor(descriptor, listener);
+    }
+
+    private void installDescriptor(JSONObject descriptor, InstallListener listener) {
+        String id = descriptor.optString("id");
         synchronized (this) {
             ResourceState existing = states.get(id);
             if (existing != null && (existing.status == ResourceState.Status.QUEUED
@@ -108,10 +123,13 @@ public final class ResourceManager {
                     || existing.status == ResourceState.Status.VERIFYING)) {
                 throw new IllegalStateException("资源任务已在执行: " + id);
             }
-            update(new ResourceState(id, descriptor.optString("type"), descriptor.optString("version"),
-                    ResourceState.Status.QUEUED, 0, effective(descriptor).optLong("size"), null, null));
+            String activeVersion = existing != null && existing.usable() ? existing.version : null;
+            String activePath = existing != null && existing.usable() ? existing.path : null;
+            update(new ResourceState(id, descriptor.optString("type"), activeVersion,
+                    descriptor.optString("version"), ResourceState.Status.QUEUED, 0,
+                    effective(descriptor).optLong("size"), activePath, null));
         }
-        executor.execute(() -> downloadAndInstall(descriptor));
+        executor.execute(() -> downloadAndInstall(descriptor, listener));
     }
 
     public void installAllOutdated() {
@@ -119,10 +137,60 @@ public final class ResourceManager {
         for (int i = 0; i < resources.length(); i++) {
             JSONObject descriptor = resources.optJSONObject(i);
             ResourceState current = state(descriptor.optString("id"));
-            if (current.status != ResourceState.Status.INSTALLED
-                    || !descriptor.optString("version").equals(current.version)) {
+            if (!current.usable() || !descriptor.optString("version").equals(current.version)) {
                 install(descriptor.optString("id"));
             }
+        }
+    }
+
+    public void importResource(String id, InputStream input) throws IOException {
+        JSONObject descriptor = descriptor(id);
+        if (!"model".equals(descriptor.optString("type"))) {
+            throw new IllegalArgumentException("本地文件导入只接受 model 资源");
+        }
+        ResourceState existing;
+        synchronized (this) {
+            existing = states.get(id);
+            if (existing != null && (existing.status == ResourceState.Status.QUEUED
+                    || existing.status == ResourceState.Status.DOWNLOADING
+                    || existing.status == ResourceState.Status.VERIFYING)) {
+                throw new IllegalStateException("资源任务已在执行: " + id);
+            }
+        }
+        File partial = partialFile(id, descriptor.optString("version"));
+        ensureDirectory(partial.getParentFile());
+        long expected = effective(descriptor).optLong("size");
+        update(new ResourceState(id, "model", existing != null && existing.usable() ? existing.version : null,
+                descriptor.optString("version"), ResourceState.Status.DOWNLOADING, 0, expected,
+                existing != null && existing.usable() ? existing.path : null, null));
+        try (FileOutputStream file = new FileOutputStream(partial, false)) {
+            byte[] buffer = new byte[128 * 1024];
+            long copied = 0;
+            int count;
+            while ((count = input.read(buffer)) != -1) {
+                file.write(buffer, 0, count);
+                copied += count;
+                if (copied > expected) throw new IOException("导入文件超过配置声明大小");
+            }
+            file.getFD().sync();
+        } catch (Exception error) {
+            failed(descriptor, error);
+            if (error instanceof IOException) throw (IOException) error;
+            throw new IOException("模型导入失败", error);
+        }
+        try {
+            update(new ResourceState(id, "model", existing != null && existing.usable() ? existing.version : null,
+                    descriptor.optString("version"), ResourceState.Status.VERIFYING, partial.length(), expected,
+                    existing != null && existing.usable() ? existing.path : null, null));
+            verify(partial, expected, effective(descriptor).optString("sha256"));
+            File installed = activate(descriptor, effective(descriptor), partial);
+            update(new ResourceState(id, "model", descriptor.optString("version"), descriptor.optString("version"),
+                    ResourceState.Status.INSTALLED, expected, expected, installed.getAbsolutePath(), null));
+            events.info("resource", "本地模型已校验并原子激活 " + id + "@" + descriptor.optString("version"));
+        } catch (Exception error) {
+            failed(descriptor, error);
+            if (error instanceof IOException) throw (IOException) error;
+            throw new IOException("模型导入失败", error);
         }
     }
 
@@ -135,9 +203,9 @@ public final class ResourceManager {
         }
         File resourceDirectory = new File(new File(root, descriptor.optString("type")), id);
         deleteTree(resourceDirectory);
-        File partial = partialFile(id);
-        if (partial.exists() && !partial.delete()) {
-            throw new IOException("无法删除未完成下载: " + partial);
+        File[] partials = downloads.listFiles((directory, name) -> name.startsWith(id + "@") && name.endsWith(".part"));
+        if (partials != null) for (File partial : partials) {
+            if (!partial.delete()) throw new IOException("无法删除未完成下载: " + partial);
         }
         states.remove(id);
         persistStates();
@@ -154,36 +222,74 @@ public final class ResourceManager {
         listeners.remove(listener);
     }
 
-    private void downloadAndInstall(JSONObject descriptor) {
+    private void downloadAndInstall(JSONObject descriptor, InstallListener listener) {
         String id = descriptor.optString("id");
         JSONObject source;
+        File installed;
         try {
             source = effective(descriptor);
-            File partial = partialFile(id);
+            File partial = partialFile(id, descriptor.optString("version"));
             long existing = partial.isFile() ? partial.length() : 0;
             long total = source.optLong("size");
             if (existing > total) {
                 throw new IOException("部分文件大于声明大小: " + existing + " > " + total);
             }
-            update(new ResourceState(id, descriptor.optString("type"), descriptor.optString("version"),
-                    ResourceState.Status.DOWNLOADING, existing, total, null, null));
+            ResourceState active = activeState(id);
+            update(taskState(descriptor, active, ResourceState.Status.DOWNLOADING, existing, total, null));
             transfer(source.optString("url"), partial, existing, total, descriptor);
-            update(new ResourceState(id, descriptor.optString("type"), descriptor.optString("version"),
-                    ResourceState.Status.VERIFYING, partial.length(), total, null, null));
+            update(taskState(descriptor, active, ResourceState.Status.VERIFYING, partial.length(), total, null));
             verify(partial, total, source.optString("sha256"));
-            File installed = activate(descriptor, source, partial);
+            installed = activate(descriptor, source, partial);
             update(new ResourceState(id, descriptor.optString("type"), descriptor.optString("version"),
-                    ResourceState.Status.INSTALLED, total, total, installed.getAbsolutePath(), null));
+                    descriptor.optString("version"), ResourceState.Status.INSTALLED,
+                    total, total, installed.getAbsolutePath(), null));
             events.info("resource", "资源已校验并原子激活 " + id + "@" + descriptor.optString("version"));
         } catch (Exception error) {
-            ResourceState before;
-            synchronized (this) { before = states.get(id); }
-            long downloaded = before == null ? 0 : before.downloaded;
-            long total = before == null ? 0 : before.total;
-            update(new ResourceState(id, descriptor.optString("type"), descriptor.optString("version"),
-                    ResourceState.Status.FAILED, downloaded, total, null, error.getMessage()));
+            failed(descriptor, error);
             events.error("resource", "资源安装失败 " + id, error);
+            return;
         }
+        if (listener != null) {
+            try {
+                listener.onInstalled(installed);
+            } catch (Exception error) {
+                events.error("update", "资源安装后回调失败 " + id, error);
+            }
+        }
+        if ("config".equals(descriptor.optString("type")) && descriptor.optBoolean("autoActivate")) {
+            try (InputStream input = new FileInputStream(installed)) {
+                config.activate(Jsons.readUtf8(input));
+            } catch (Exception error) {
+                events.error("update", "配置资源自动激活被拒绝，文件已安装且当前配置保持不变 " + id, error);
+                return;
+            }
+            events.info("update", "配置资源已校验并自动激活 " + id + "@" + descriptor.optString("version"));
+        }
+    }
+
+    private void failed(JSONObject descriptor, Exception error) {
+        ResourceState before;
+        synchronized (this) { before = states.get(descriptor.optString("id")); }
+        String activeVersion = before != null && before.usable() ? before.version : null;
+        String activePath = before != null && before.usable() ? before.path : null;
+        update(new ResourceState(descriptor.optString("id"), descriptor.optString("type"), activeVersion,
+                descriptor.optString("version"), ResourceState.Status.FAILED,
+                before == null ? 0 : before.downloaded, before == null ? 0 : before.total,
+                activePath, error.getMessage()));
+    }
+
+    private ResourceState activeState(String id) {
+        synchronized (this) {
+            ResourceState value = states.get(id);
+            return value != null && value.usable() ? value : null;
+        }
+    }
+
+    private static ResourceState taskState(JSONObject descriptor, ResourceState active, ResourceState.Status status,
+                                           long downloaded, long total, String error) {
+        return new ResourceState(descriptor.optString("id"), descriptor.optString("type"),
+                active == null ? null : active.version, descriptor.optString("version"), status,
+                downloaded, total, active == null ? null : active.path, error);
     }
 
     private void transfer(String address, File partial, long existing, long expected,
@@ -223,9 +329,8 @@ public final class ResourceManager {
                 downloaded += count;
                 long now = System.currentTimeMillis();
                 if (now - lastReport >= 500) {
-                    update(new ResourceState(descriptor.optString("id"), descriptor.optString("type"),
-                            descriptor.optString("version"), ResourceState.Status.DOWNLOADING,
-                            downloaded, expected, null, null));
+                    update(taskState(descriptor, activeState(descriptor.optString("id")),
+                            ResourceState.Status.DOWNLOADING, downloaded, expected, null));
                     lastReport = now;
                 }
             }
@@ -370,11 +475,11 @@ public final class ResourceManager {
                     || state.status == ResourceState.Status.VERIFYING) {
                 JSONObject descriptor = findDescriptor(item.getKey());
                 if (descriptor != null) {
-                    File partial = partialFile(item.getKey());
+                    File partial = partialFile(item.getKey(), state.targetVersion);
                     states.put(item.getKey(), new ResourceState(item.getKey(), descriptor.optString("type"),
-                            descriptor.optString("version"), ResourceState.Status.FAILED,
+                            state.usable() ? state.version : null, state.targetVersion, ResourceState.Status.FAILED,
                             partial.isFile() ? partial.length() : 0, effective(descriptor).optLong("size"),
-                            null, "进程在任务完成前终止，可重新执行以从断点续传"));
+                            state.usable() ? state.path : null, "进程在任务完成前终止，可重新执行以从断点续传"));
                 }
             }
         }
@@ -413,13 +518,24 @@ public final class ResourceManager {
     }
 
     private ResourceState missing(JSONObject descriptor) {
-        return new ResourceState(descriptor.optString("id"), descriptor.optString("type"),
+        return new ResourceState(descriptor.optString("id"), descriptor.optString("type"), null,
                 descriptor.optString("version"), ResourceState.Status.MISSING, 0,
                 effective(descriptor).optLong("size"), null, null);
     }
 
-    private File partialFile(String id) {
-        return new File(downloads, id + ".part");
+    private ResourceState present(JSONObject descriptor, ResourceState state) {
+        if (state == null) return missing(descriptor);
+        String wanted = descriptor.optString("version");
+        if (state.usable() && !wanted.equals(state.version)
+                && (state.status == ResourceState.Status.INSTALLED || state.status == ResourceState.Status.UPDATE_AVAILABLE)) {
+            return new ResourceState(state.id, descriptor.optString("type"), state.version, wanted,
+                    ResourceState.Status.UPDATE_AVAILABLE, 0, effective(descriptor).optLong("size"), state.path, null);
+        }
+        return state;
+    }
+
+    private File partialFile(String id, String version) {
+        return new File(downloads, id + "@" + version.replaceAll("[^A-Za-z0-9._-]", "_") + ".part");
     }
 
     private static void ensureDirectory(File directory) {
@@ -435,4 +551,3 @@ public final class ResourceManager {
         if (!target.delete()) throw new IOException("无法删除: " + target);
     }
 }
-
