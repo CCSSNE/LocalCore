@@ -31,7 +31,7 @@
 
 ### 输入框文字垂直居中规范
 
-安卓原生输入框的字基线同时受字体度量、内边距和重力三方影响，肉眼调一次对不齐（已在聊天输入框和数字弹窗输入框上连翻两次）。凡是框里有字的输入框，单行多行一律统一用这套写法，不许各自发明：`textAlignVertical: 'center'` + `includeFontPadding: false` + `paddingVertical: 0` + `minHeight` 定高（多行再加 `maxHeight` 放行）。高度只由 `minHeight` 撑，位置只由重力定，内外边距不许参与。
+安卓原生输入框的字基线同时受字体度量、内边距和重力三方影响，肉眼调一次对不齐（已在聊天输入框和数字弹窗输入框上连翻两次）。凡是框里有字的输入框，单行多行一律统一用这套写法，不许各自发明：`textAlignVertical: 'center'` + `includeFontPadding: false` + `paddingVertical: 0` + `minHeight` 定高（多行再加 `maxHeight` 放行）。高度只由 `minHeight` 撑，位置只由重力定，内外边距不许参与。唯一例外是代码模板这类长文本编辑框：内容贴顶向下长，用顶对齐。
 
 ### 请求范围与执行边界
 
