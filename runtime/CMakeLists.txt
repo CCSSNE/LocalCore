@@ -24,6 +24,8 @@ target_compile_definitions(localcore_runtime PRIVATE LOCALCORE_RUNTIME_VERSION="
 target_compile_options(localcore_runtime PRIVATE -Wall -Wextra -Werror -fvisibility=hidden)
 target_include_directories(localcore_runtime PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/../native-api"
+)
+target_include_directories(localcore_runtime SYSTEM PRIVATE
     "${LLAMA_CPP_SOURCE_DIR}/include"
     "${LLAMA_CPP_SOURCE_DIR}/common"
     "${LLAMA_CPP_SOURCE_DIR}/vendor"
