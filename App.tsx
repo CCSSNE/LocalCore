@@ -68,28 +68,6 @@ function parseModels(root: any): ModelEntry[] {
   }));
 }
 
-function ActionCard(props: {
-  title: string;
-  desc?: string;
-  running: boolean;
-  onPress: () => void;
-}) {
-  return (
-    <TouchableOpacity
-      onPress={props.onPress}
-      disabled={props.running}
-      style={[styles.card, props.running && styles.cardDisabled]}>
-      <View style={styles.cardRow}>
-        <View style={styles.cardText}>
-          <Text style={styles.cardTitle}>{props.title}</Text>
-          {props.desc ? <Text style={styles.cardDesc}>{props.desc}</Text> : null}
-        </View>
-        {props.running ? <ActivityIndicator /> : null}
-      </View>
-    </TouchableOpacity>
-  );
-}
-
 export default function App() {
   const [route, setRoute] = useState<RouteKey>('chat');
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -97,7 +75,6 @@ export default function App() {
   const [busy, setBusy] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [draft, setDraft] = useState('');
-  const [stateCache, setStateCache] = useState<string | null>(null);
   const [modelList, setModelList] = useState<ModelEntry[] | null>(null);
   const [modelError, setModelError] = useState<string | null>(null);
   const [listLoading, setListLoading] = useState(false);
@@ -105,6 +82,9 @@ export default function App() {
   const [coreInfo, setCoreInfo] = useState<{id: string; version: string} | null>(null);
   const [coreError, setCoreError] = useState<string | null>(null);
   const [coreLoading, setCoreLoading] = useState(false);
+  const [backendInfo, setBackendInfo] = useState<{running: boolean; address: string | null; error: string | null} | null>(null);
+  const [backendError, setBackendError] = useState<string | null>(null);
+  const [backendLoading, setBackendLoading] = useState(false);
   const chatScroll = useRef<ScrollView | null>(null);
   const logScroll = useRef<ScrollView | null>(null);
 
@@ -132,12 +112,7 @@ export default function App() {
       .finally(() => setBusy(null));
   };
 
-  const refreshState = () =>
-    run('查询状态', async () => {
-      const value = await Backend.getBackendState();
-      setStateCache(String(value));
-      return value;
-    });
+  const refreshState = () => run('查询状态', () => Backend.getBackendState());
 
   const fetchModels = async () => {
     setListLoading(true);
@@ -146,7 +121,6 @@ export default function App() {
       const root = JSON.parse(value);
       setModelList(parseModels(root));
       setLoadedId(root?.runtime?.modelId ?? null);
-      setStateCache(value);
       setModelError(null);
     } catch (error: any) {
       const message = error?.message ?? String(error);
@@ -174,7 +148,6 @@ export default function App() {
         }
       }
       setCoreInfo(found);
-      setStateCache(value);
       setCoreError(null);
     } catch (error: any) {
       const message = error?.message ?? String(error);
@@ -185,6 +158,27 @@ export default function App() {
     }
   };
 
+  const fetchBackend = async () => {
+    setBackendLoading(true);
+    try {
+      const value = String(await Backend.getBackendState());
+      const root = JSON.parse(value);
+      const b = root?.backend ?? {};
+      setBackendInfo({
+        running: !!b.running,
+        address: b.address == null ? null : String(b.address),
+        error: b.error == null ? null : String(b.error),
+      });
+      setBackendError(null);
+    } catch (error: any) {
+      const message = error?.message ?? String(error);
+      setBackendError(message);
+      push('fail', 'FAIL 刷新后端状态 => ' + message);
+    } finally {
+      setBackendLoading(false);
+    }
+  };
+
   useEffect(() => {
     if (route === 'model') {
       fetchModels();
@@ -192,18 +186,11 @@ export default function App() {
     if (route === 'core') {
       fetchCore();
     }
+    if (route === 'backend') {
+      fetchBackend();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [route]);
-
-  const stateJson = (): any | null => {
-    if (!stateCache) return null;
-    try {
-      return JSON.parse(stateCache);
-    } catch (error: any) {
-      push('fail', 'FAIL 解析状态 => ' + (error?.message ?? String(error)));
-      return null;
-    }
-  };
 
   const importModel = () =>
     run('导入模型', pickAnd('导入模型', uri => Backend.importModel(uri)), () => {
@@ -270,8 +257,6 @@ export default function App() {
       ],
     );
   };
-
-  const parsed = stateJson();
 
   const renderChat = () => (
     <View style={styles.screen}>
@@ -437,31 +422,51 @@ export default function App() {
     </ScrollView>
   );
 
+  const startBackend = () =>
+    run('启动后端服务', () => Backend.startService(), () => {
+      fetchBackend();
+    });
+
+  const stopBackend = () =>
+    run('停止后端服务', () => Backend.stopService(), () => {
+      fetchBackend();
+    });
+
   const renderBackend = () => (
     <ScrollView style={styles.screen} contentContainerStyle={styles.screenContent}>
-      <ActionCard
-        title="启动后端服务"
-        running={busy === '启动后端服务'}
-        onPress={() => run('启动后端服务', () => Backend.startService())}
-      />
-      <ActionCard
-        title="停止后端服务"
-        running={busy === '停止后端服务'}
-        onPress={() => run('停止后端服务', () => Backend.stopService())}
-      />
-      <ActionCard
-        title="查询后端状态"
-        running={busy === '查询状态'}
-        onPress={refreshState}
-      />
-      {parsed ? (
-        <View style={styles.statusBox}>
-          <Text style={styles.statusTitle}>backend</Text>
-          <Text style={styles.statusText} selectable>{JSON.stringify(parsed.backend ?? null, null, 2)}</Text>
+      <View style={styles.rowBtns}>
+        <TouchableOpacity
+          style={[styles.miniBtn, styles.btnFlex]}
+          disabled={!!busy}
+          onPress={startBackend}>
+          <Text>启动</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.miniBtn, styles.btnFlex, styles.btnLast]}
+          disabled={!!busy}
+          onPress={stopBackend}>
+          <Text>停止</Text>
+        </TouchableOpacity>
+      </View>
+      {backendLoading && backendInfo === null && backendError === null ? (
+        <View style={styles.centerBox}>
+          <ActivityIndicator />
+          <Text style={styles.hint}>正在读取后端状态…</Text>
         </View>
-      ) : (
-        <Text style={styles.hint}>点「查询后端状态」查看 running / address / error。</Text>
-      )}
+      ) : null}
+      {backendError !== null ? (
+        <TouchableOpacity style={styles.statusBox} onPress={() => fetchBackend()}>
+          <Text style={styles.logFail}>加载失败：{backendError}</Text>
+          <Text style={styles.hint}>点我重试</Text>
+        </TouchableOpacity>
+      ) : null}
+      {backendInfo !== null ? (
+        <View style={styles.statusBox}>
+          <Text style={styles.statusTitle}>状态：{backendInfo.running ? '运行中' : '未运行'}</Text>
+          <Text style={styles.statusText} selectable>地址：{backendInfo.address ?? '—'}</Text>
+          <Text style={styles.statusText} selectable>错误：{backendInfo.error ?? '无'}</Text>
+        </View>
+      ) : null}
     </ScrollView>
   );
 
@@ -573,19 +578,6 @@ const styles = StyleSheet.create({
   screen: {flex: 1, backgroundColor: '#ffffff'},
   screenContent: {padding: 16},
   centerBox: {alignItems: 'center', paddingVertical: 24},
-  card: {
-    padding: 14,
-    marginBottom: 10,
-    borderWidth: 1,
-    borderColor: '#dddddd',
-    borderRadius: 10,
-    backgroundColor: '#f7f7f7',
-  },
-  cardDisabled: {opacity: 0.6},
-  cardRow: {flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between'},
-  cardText: {flex: 1, paddingRight: 12},
-  cardTitle: {fontSize: 15, color: '#111111', fontWeight: '600'},
-  cardDesc: {fontSize: 12, color: '#666666', marginTop: 4},
   hint: {fontSize: 13, color: '#666666', lineHeight: 20},
   statusBox: {marginTop: 8, padding: 12, borderWidth: 1, borderColor: '#e0e0e0', borderRadius: 10},
   statusTitle: {fontSize: 13, fontWeight: 'bold', color: '#333333', marginTop: 8},
