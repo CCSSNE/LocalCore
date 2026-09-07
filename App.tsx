@@ -13,6 +13,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import {KeyboardAvoidingView, KeyboardProvider} from 'react-native-keyboard-controller';
 
 const {Backend} = NativeModules;
 
@@ -315,6 +316,7 @@ export default function App() {
 
   const renderChat = () => (
     <View style={styles.screen}>
+      <KeyboardAvoidingView behavior="padding" style={styles.chatAvoid}>
       <ScrollView
         ref={chatScroll}
         style={styles.chatList}
@@ -374,6 +376,7 @@ export default function App() {
           <Text style={styles.sendText}>发送</Text>
         </TouchableOpacity>
       </View>
+      </KeyboardAvoidingView>
     </View>
   );
 
@@ -589,6 +592,7 @@ export default function App() {
   };
 
   return (
+    <KeyboardProvider>
     <View style={styles.root}>
       <View style={styles.header}>
         <TouchableOpacity onPress={() => setDrawerOpen(true)} style={styles.iconBtn}>
@@ -627,8 +631,8 @@ export default function App() {
         </Pressable>
       </Modal>
 
-      <Modal visible={chatMenuOpen} transparent animationType="fade" onRequestClose={() => setChatMenuOpen(false)}>
-        <Pressable style={styles.menuMask} onPress={() => setChatMenuOpen(false)}>
+      {chatMenuOpen ? (
+        <Pressable style={styles.menuLayer} onPress={() => setChatMenuOpen(false)}>
           <Pressable style={styles.menu} onPress={e => e.stopPropagation()}>
             <TouchableOpacity
               style={styles.menuItem}
@@ -640,8 +644,9 @@ export default function App() {
             </TouchableOpacity>
           </Pressable>
         </Pressable>
-      </Modal>
+      ) : null}
     </View>
+    </KeyboardProvider>
   );
 }
 
@@ -739,6 +744,7 @@ const styles = StyleSheet.create({
     borderColor: '#666666',
   },
   rowBtns: {flexDirection: 'row'},
+  chatAvoid: {flex: 1},
   chatList: {flex: 1},
   chatListContent: {padding: 16},
   bubble: {padding: 10, borderRadius: 10, marginBottom: 8, maxWidth: '85%', alignSelf: 'flex-start'},
@@ -787,7 +793,14 @@ const styles = StyleSheet.create({
   drawerText: {fontSize: 15, color: '#333333'},
   drawerTextActive: {color: '#1a3faa', fontWeight: '700'},
   drawerFoot: {marginTop: 24, marginLeft: 8, fontSize: 12, color: '#999999'},
-  menuMask: {flex: 1, backgroundColor: 'transparent'},
-  menu: {position: 'absolute', top: 92, right: 8, backgroundColor: '#ffffff', borderRadius: 10, borderWidth: 1, borderColor: '#e0e0e0', minWidth: 170, paddingVertical: 6, elevation: 4},
+  menuLayer: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'transparent',
+  },
+  menu: {position: 'absolute', top: 94, right: 8, backgroundColor: '#ffffff', borderRadius: 10, borderWidth: 1, borderColor: '#e0e0e0', minWidth: 170, paddingVertical: 6, elevation: 4},
   menuItem: {paddingVertical: 12, paddingHorizontal: 16},
 });
