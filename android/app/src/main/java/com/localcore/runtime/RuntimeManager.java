@@ -104,7 +104,11 @@ public final class RuntimeManager {
             request.put("gpuLayers", Math.max(0, load.optInt("gpuLayers", 0)));
             JSONObject template = model.optJSONObject("template");
             if (template != null && "custom".equals(template.optString("mode"))) {
-                request.put("chatTemplate", template.getString("value"));
+                String custom = template.optString("value", "");
+                if (custom.isEmpty()) {
+                    throw new IllegalArgumentException("自定义模板为空，拒绝加载模型 " + modelId);
+                }
+                request.put("chatTemplate", custom);
             }
             JSONObject response = new JSONObject(nativeRuntime.loadModel(request.toString()));
             loadedModelId = modelId;

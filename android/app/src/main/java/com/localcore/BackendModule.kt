@@ -359,6 +359,14 @@ class BackendModule(private val reactContext: ReactApplicationContext) :
   }
 
   @ReactMethod
+  fun unloadModel(promise: Promise) {
+    runAsync(promise, "UNLOAD_FAILED") {
+      application.graph.runtime.unload()
+      null
+    }
+  }
+
+  @ReactMethod
   fun getModelTemplate(modelId: String, promise: Promise) {
     runAsync(promise, "TEMPLATE_FAILED") {
       application.graph.exchange.modelTemplate(modelId)
