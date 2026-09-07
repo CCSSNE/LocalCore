@@ -200,6 +200,8 @@ export default function App() {
   const chatScrollSig = useRef<string>('');
   // 是否跟随输出追到最下面：用户主动上滑即停，滑回底部再恢复。
   const followOutput = useRef(true);
+  // 从测试页小横杠跳去模型页后，加载成功自动跳回测试页。只用于这一种情况。
+  const chatReturnAfterLoad = useRef(false);
 
   const push = (kind: LogLine['kind'], text: string) =>
     setLog(prev => [...prev, {kind, text: `[${fmtClock(new Date())}] ${text}`}]);
@@ -502,6 +504,7 @@ export default function App() {
 
   useEffect(() => {
     if (route === 'chat') {
+      chatReturnAfterLoad.current = false;
       fetchChatState();
     }
     if (route === 'model') {
@@ -746,6 +749,7 @@ export default function App() {
         : chatGate.loaded
           ? null
           : '模型未加载，先去模型屏点加载';
+    const gateCanGoModel = !chatGate.loading && chatGate.models > 0 && !chatGate.loaded;
     const inputLocked = !!busy || gateHint !== null;
     const generating = busy === '聊天推理';
     const canSend = draft.trim() !== '' || pendingImages.length > 0;
@@ -823,9 +827,20 @@ export default function App() {
         </View>
       ) : null}
       {gateHint !== null ? (
-        <View style={styles.pendingBar}>
-          <Text style={styles.pendingText}>{gateHint}</Text>
-        </View>
+        gateCanGoModel ? (
+          <TouchableOpacity
+            style={styles.pendingBar}
+            onPress={() => {
+              chatReturnAfterLoad.current = true;
+              go('model');
+            }}>
+            <Text style={styles.pendingText}>{gateHint}</Text>
+          </TouchableOpacity>
+        ) : (
+          <View style={styles.pendingBar}>
+            <Text style={styles.pendingText}>{gateHint}</Text>
+          </View>
+        )
       ) : null}
       <View style={styles.inputBar}>
         <TouchableOpacity onPress={pickImage} disabled={inputLocked} style={styles.iconBtn}>
@@ -980,6 +995,10 @@ export default function App() {
                 onPress={() =>
                   run('加载模型', () => Backend.loadModel(model.id), () => {
                     fetchModels();
+                    if (chatReturnAfterLoad.current) {
+                      chatReturnAfterLoad.current = false;
+                      go('chat');
+                    }
                   })
                 }>
                 <Text>加载</Text>
