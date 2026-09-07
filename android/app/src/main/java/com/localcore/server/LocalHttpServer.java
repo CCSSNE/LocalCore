@@ -126,13 +126,14 @@ public final class LocalHttpServer {
 
     private void route(HttpRequest request, HttpOutput output) throws IOException {
         String path = request.target.getPath();
-        if ("GET".equals(request.method) && "/health".equals(path)) {
+        JSONObject routes = config.current().optJSONObject("protocol").optJSONObject("routes");
+        if ("GET".equals(request.method) && routes.optString("health").equals(path)) {
             output.json(200, health());
-        } else if ("GET".equals(request.method) && "/v1/models".equals(path)) {
+        } else if ("GET".equals(request.method) && routes.optString("models").equals(path)) {
             output.json(200, models());
-        } else if ("POST".equals(request.method) && "/v1/chat/completions".equals(path)) {
+        } else if ("POST".equals(request.method) && routes.optString("chatCompletions").equals(path)) {
             chat(parseJson(request), output);
-        } else if ("POST".equals(request.method) && "/v1/completions".equals(path)) {
+        } else if ("POST".equals(request.method) && routes.optString("completions").equals(path)) {
             completion(parseJson(request), output);
         } else if ("GET".equals(request.method) || "POST".equals(request.method)) {
             throw new HttpProblem(404, "not_found", "不存在的端点: " + path);
@@ -154,7 +155,8 @@ public final class LocalHttpServer {
             streamRole(output, completionId, created, modelId);
             RuntimeManager.Result result = runtime.chat(messages, request,
                     token -> streamToken(output, completionId, created, modelId, token));
-            streamFinish(output, completionId, created, modelId, result);
+            if (result.structured) streamMessage(output, completionId, created, modelId, result.message);
+            streamFinish(output, completionId, created, modelId, result, finishReason(result.message));
             output.event("[DONE]");
         } else {
             RuntimeManager.Result result = runtime.chat(messages, request, null);
@@ -231,8 +233,7 @@ public final class LocalHttpServer {
             put(item, "name", model.optString("name"));
             ResourceState modelState = resources.state(model.optString("resource"));
             ResourceState coreState = resources.state(model.optString("core"));
-            put(item, "ready", modelState.status == ResourceState.Status.INSTALLED
-                    && coreState.status == ResourceState.Status.INSTALLED);
+            put(item, "ready", modelState.usable() && coreState.usable());
             data.put(item);
         }
         put(result, "data", data);
@@ -270,13 +271,13 @@ public final class LocalHttpServer {
 
     private static JSONObject chatResult(String id, long created, String model, RuntimeManager.Result result) {
         JSONObject body = base(id, "chat.completion", created, model);
-        JSONObject message = new JSONObject();
-        put(message, "role", "assistant");
-        put(message, "content", result.text);
+        JSONObject message = result.message == null ? new JSONObject() : result.message;
+        if (!message.has("role")) put(message, "role", "assistant");
+        if (!message.has("content")) put(message, "content", JSONObject.NULL);
         JSONObject choice = new JSONObject();
         put(choice, "index", 0);
         put(choice, "message", message);
-        put(choice, "finish_reason", "stop");
+        put(choice, "finish_reason", finishReason(message));
         JSONArray choices = new JSONArray();
         choices.put(choice);
         put(body, "choices", choices);
@@ -298,9 +299,25 @@ public final class LocalHttpServer {
         return true;
     }
 
+    private static void streamMessage(HttpOutput output, String id, long created, String model,
+                                      JSONObject message) throws IOException {
+        JSONObject delta = new JSONObject();
+        java.util.Iterator<String> keys = message.keys();
+        while (keys.hasNext()) {
+            String key = keys.next();
+            if (!"role".equals(key)) put(delta, key, message.opt(key));
+        }
+        output.event(chatChunk(id, created, model, delta, null, null).toString());
+    }
+
     private static void streamFinish(HttpOutput output, String id, long created, String model,
-                                     RuntimeManager.Result result) throws IOException {
-        output.event(chatChunk(id, created, model, new JSONObject(), "stop", usage(result)).toString());
+                                     RuntimeManager.Result result, String reason) throws IOException {
+        output.event(chatChunk(id, created, model, new JSONObject(), reason, usage(result)).toString());
+    }
+
+    private static String finishReason(JSONObject message) {
+        return message != null && message.optJSONArray("tool_calls") != null
+                && message.optJSONArray("tool_calls").length() > 0 ? "tool_calls" : "stop";
     }
 
     private static JSONObject chatChunk(String id, long created, String model, JSONObject delta,

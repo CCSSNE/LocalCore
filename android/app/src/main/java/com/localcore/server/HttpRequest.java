@@ -49,8 +49,11 @@ final class HttpRequest {
         }
         if (line == null) throw new EOFException("HTTP 请求头未完整结束");
         String transferEncoding = headers.get("transfer-encoding");
-        if (transferEncoding != null) {
-            throw new HttpProblem(501, "unsupported_transfer_encoding", "请求体暂不支持 Transfer-Encoding");
+        if (transferEncoding != null && !"chunked".equalsIgnoreCase(transferEncoding)) {
+            throw new HttpProblem(501, "unsupported_transfer_encoding", "只支持 chunked Transfer-Encoding");
+        }
+        if (transferEncoding != null && headers.containsKey("content-length")) {
+            throw new HttpProblem(400, "invalid_request", "Transfer-Encoding 与 Content-Length 不能同时出现");
         }
         long contentLength = 0;
         String contentLengthHeader = headers.get("content-length");
@@ -64,14 +67,44 @@ final class HttpRequest {
                 throw new HttpProblem(400, "invalid_request", "Content-Length 超出 Android 单个字节数组范围");
             }
         }
-        byte[] body = new byte[(int) contentLength];
+        byte[] body = transferEncoding == null ? readFixed(input, (int) contentLength) : readChunked(input);
+        return new HttpRequest(parts[0], target, headers, body);
+    }
+
+    private static byte[] readFixed(InputStream input, int length) throws IOException {
+        byte[] body = new byte[length];
         int offset = 0;
         while (offset < body.length) {
             int count = input.read(body, offset, body.length - offset);
             if (count < 0) throw new EOFException("HTTP 请求体提前结束");
             offset += count;
         }
-        return new HttpRequest(parts[0], target, headers, body);
+        return body;
+    }
+
+    private static byte[] readChunked(InputStream input) throws IOException {
+        ByteArrayOutputStream body = new ByteArrayOutputStream();
+        while (true) {
+            String line = readLine(input);
+            if (line == null) throw new EOFException("chunk 大小行缺失");
+            int extension = line.indexOf(';');
+            String sizeText = (extension < 0 ? line : line.substring(0, extension)).trim();
+            final int size;
+            try { size = Integer.parseUnsignedInt(sizeText, 16); }
+            catch (NumberFormatException error) { throw new HttpProblem(400, "invalid_request", "chunk 大小无效"); }
+            if (size == 0) {
+                while (true) {
+                    String trailer = readLine(input);
+                    if (trailer == null) throw new EOFException("chunk trailer 未结束");
+                    if (trailer.isEmpty()) return body.toByteArray();
+                    if (trailer.indexOf(':') <= 0) throw new HttpProblem(400, "invalid_request", "chunk trailer 无效");
+                }
+            }
+            byte[] chunk = readFixed(input, size);
+            body.write(chunk);
+            String end = readLine(input);
+            if (end == null || !end.isEmpty()) throw new HttpProblem(400, "invalid_request", "chunk 数据后缺少 CRLF");
+        }
     }
 
     String bodyText() {
@@ -97,4 +130,3 @@ final class HttpRequest {
         throw new EOFException("HTTP 行提前结束");
     }
 }
-
