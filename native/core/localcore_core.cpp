@@ -431,8 +431,9 @@ extern "C" LOCALCORE_EXPORT int localcore_core_infer(
             message = common_chat_parse(text, false, parser);
             message_pointer = &message;
         }
-        if (callback != nullptr && !text.empty()
-                && callback(text.data(), text.size(), user_data) == 0) {
+        const std::string & callback_text = message_pointer == nullptr ? text : message_pointer->content;
+        if (callback != nullptr && !callback_text.empty()
+                && callback(callback_text.data(), callback_text.size(), user_data) == 0) {
             throw std::runtime_error("响应消费者拒绝生成文本");
         }
         set_string(result_json, make_result(prompt_tokens, completion_tokens, text, message_pointer).dump());

@@ -305,9 +305,9 @@ public final class LocalHttpServer {
         java.util.Iterator<String> keys = message.keys();
         while (keys.hasNext()) {
             String key = keys.next();
-            if (!"role".equals(key)) put(delta, key, message.opt(key));
+            if (!"role".equals(key) && !"content".equals(key)) put(delta, key, message.opt(key));
         }
-        output.event(chatChunk(id, created, model, delta, null, null).toString());
+        if (delta.length() > 0) output.event(chatChunk(id, created, model, delta, null, null).toString());
     }
 
     private static void streamFinish(HttpOutput output, String id, long created, String model,
