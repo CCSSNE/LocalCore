@@ -10,6 +10,7 @@ import java.nio.charset.StandardCharsets;
 
 public final class GgufMeta {
     private static final String CHAT_TEMPLATE = "tokenizer.chat_template";
+    private static final String CONTEXT_LENGTH = "llama.context_length";
     private static final int TYPE_STRING = 8;
     private static final int TYPE_ARRAY = 9;
 
@@ -44,6 +45,46 @@ public final class GgufMeta {
                 skipValue(input, type);
             }
             return null;
+        }
+    }
+
+    // 读不到或不是整数标量时返回 -1，由调用方决定回退值。
+    public static long contextLength(File file) throws IOException {
+        try (DataInputStream input = new DataInputStream(new BufferedInputStream(new FileInputStream(file), 1 << 16))) {
+            byte[] magic = new byte[4];
+            input.readFully(magic);
+            if (magic[0] != 'G' || magic[1] != 'G' || magic[2] != 'U' || magic[3] != 'F') {
+                throw new IOException("不是 GGUF 文件: " + file.getName());
+            }
+            readU32(input);
+            readU64(input);
+            long pairs = readU64(input);
+            for (long i = 0; i < pairs; i++) {
+                String key = readString(input);
+                int type = (int) readU32(input);
+                if (!CONTEXT_LENGTH.equals(key)) {
+                    skipValue(input, type);
+                    continue;
+                }
+                Long value = readIntValue(input, type);
+                return value == null ? -1 : value;
+            }
+            return -1;
+        }
+    }
+
+    private static Long readIntValue(DataInputStream input, int type) throws IOException {
+        switch (type) {
+            case 0: return (long) input.readUnsignedByte();
+            case 1: return (long) input.readByte();
+            case 2: return (long) Short.reverseBytes(input.readShort()) & 0xffffL;
+            case 3: return (long) Short.reverseBytes(input.readShort());
+            case 4: return readU32(input);
+            case 5: return (long) Integer.reverseBytes(input.readInt());
+            case 6: return (long) Float.intBitsToFloat(Integer.reverseBytes(input.readInt()));
+            case 10: return readU64(input);
+            case 11: return Long.reverseBytes(input.readLong());
+            default: return null;
         }
     }
 

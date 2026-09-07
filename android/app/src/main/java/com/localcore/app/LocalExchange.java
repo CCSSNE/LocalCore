@@ -51,9 +51,16 @@ public final class LocalExchange {
         }
         JSONObject next = config.current();
         upsertResource(next, descriptor);
-        next.getJSONArray("models").put(modelEntry(base, modelId, resourceId, currentCoreId()));
+        long ggufContext = -1;
+        try {
+            ggufContext = GgufMeta.contextLength(resources.installedFile(resourceId));
+        } catch (Exception error) {
+            events.error("resource", "读取模型上下文长度失败，回退 4096", error);
+        }
+        long contextSize = ggufContext > 0 ? ggufContext : 4096;
+        next.getJSONArray("models").put(modelEntry(base, modelId, resourceId, currentCoreId(), contextSize));
         config.activate(next.toString());
-        events.info("resource", "本地模型已导入并注册 " + modelId);
+        events.info("resource", "本地模型已导入并注册 " + modelId + " 上下文 " + contextSize);
         return modelId;
     }
 
@@ -326,14 +333,15 @@ public final class LocalExchange {
         return descriptor;
     }
 
-    private JSONObject modelEntry(String name, String modelId, String resourceId, String coreId) throws JSONException {
+    private JSONObject modelEntry(String name, String modelId, String resourceId, String coreId,
+                                  long contextSize) throws JSONException {
         JSONObject model = new JSONObject();
         model.put("id", modelId);
         model.put("name", name);
         model.put("resource", resourceId);
         model.put("core", coreId == null ? "" : coreId);
         model.put("template", new JSONObject().put("mode", "embedded"));
-        model.put("load", json("contextSize", 4096, "batchSize", 512, "threads", 4, "gpuLayers", -1));
+        model.put("load", json("contextSize", contextSize, "batchSize", 512, "threads", 4, "gpuLayers", -1));
         model.put("inference", json("maxTokens", 1024, "temperature", 0.7, "topP", 0.95, "topK", 40, "seed", -1,
                 "stop", new JSONArray()));
         model.put("thinking", json("enabled", false, "format", "none", "budgetTokens", -1));
