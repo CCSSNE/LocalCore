@@ -1,3 +1,2 @@
--keep class com.localcore.runtime.NativeBridge { *; }
--keep class com.localcore.runtime.NativeBridge$GenerationCallback { *; }
-
+# llama.rn
+-keep class com.rnllama.** { *; }

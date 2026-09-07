@@ -1,4 +1,4 @@
-package com.localcore.service;
+﻿package com.localcore.service;
 
 import android.app.Notification;
 import android.app.NotificationChannel;
@@ -9,7 +9,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.os.IBinder;
 
-import com.localcore.LocalCoreApplication;
+import com.localcore.MainApplication;
 import com.localcore.MainActivity;
 import com.localcore.app.AppGraph;
 import com.localcore.server.LocalHttpServer;
@@ -37,7 +37,7 @@ public final class BackendService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
-        graph = ((LocalCoreApplication) getApplication()).graph();
+        graph = ((MainApplication) getApplication()).graph();
         server = new LocalHttpServer(graph.config, graph.resources, graph.runtime, graph.events);
         createChannel();
         graph.config.addListener(configListener);
@@ -45,7 +45,7 @@ public final class BackendService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        startForeground(NOTIFICATION_ID, notification("正在启动"));
+        startForeground(NOTIFICATION_ID, notification("姝ｅ湪鍚姩"));
         String action = intent == null ? null : intent.getAction();
         if (ACTION_STOP.equals(action)) {
             requested = false;
@@ -60,11 +60,11 @@ public final class BackendService extends Service {
         try {
             server.start();
             graph.backend.update(new BackendStatus(true, server.address(), null));
-            notifyState("服务地址 " + server.address());
+            notifyState("鏈嶅姟鍦板潃 " + server.address());
         } catch (Exception error) {
-            graph.events.error("service", "HTTP 服务启动失败", error);
+            graph.events.error("service", "HTTP 鏈嶅姟鍚姩澶辫触", error);
             graph.backend.update(new BackendStatus(false, null, error.getMessage()));
-            notifyState("启动失败: " + error.getMessage());
+            notifyState("鍚姩澶辫触: " + error.getMessage());
         }
         return START_STICKY;
     }
@@ -88,18 +88,18 @@ public final class BackendService extends Service {
         try {
             server.start();
             graph.backend.update(new BackendStatus(true, server.address(), null));
-            notifyState("服务地址 " + server.address());
+            notifyState("鏈嶅姟鍦板潃 " + server.address());
         } catch (Exception error) {
-            graph.events.error("service", "配置激活后重新监听失败", error);
+            graph.events.error("service", "閰嶇疆婵€娲诲悗閲嶆柊鐩戝惉澶辫触", error);
             graph.backend.update(new BackendStatus(false, null, error.getMessage()));
-            notifyState("重启失败: " + error.getMessage());
+            notifyState("閲嶅惎澶辫触: " + error.getMessage());
         }
     }
 
     private void createChannel() {
-        NotificationChannel channel = new NotificationChannel(CHANNEL, "LocalCore 后端",
+        NotificationChannel channel = new NotificationChannel(CHANNEL, "LocalCore 鍚庣",
                 NotificationManager.IMPORTANCE_LOW);
-        channel.setDescription("本地 LLM HTTP 服务与资源任务状态");
+        channel.setDescription("鏈湴 LLM HTTP 鏈嶅姟涓庤祫婧愪换鍔＄姸鎬?);
         getSystemService(NotificationManager.class).createNotificationChannel(channel);
     }
 

@@ -1,5 +1,0 @@
-add_library(localcore_host SHARED llama_jni.cpp)
-target_include_directories(localcore_host PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_compile_features(localcore_host PRIVATE cxx_std_17)
-target_compile_options(localcore_host PRIVATE -Wall -Wextra)
-target_link_libraries(localcore_host PRIVATE log dl)

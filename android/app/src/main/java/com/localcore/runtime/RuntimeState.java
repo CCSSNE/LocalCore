@@ -21,4 +21,3 @@ public final class RuntimeState {
         return new RuntimeState(Phase.EMPTY, null, null, null, null);
     }
 }
-

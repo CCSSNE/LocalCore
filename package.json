@@ -3,10 +3,27 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
+    "start": "react-native start",
     "build:android:release": "cd android && gradlew.bat assembleRelease"
   },
+  "dependencies": {
+    "llama.rn": "0.13.0-rc.2",
+    "react": "19.1.1",
+    "react-native": "0.82.0"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.25.2",
+    "@babel/preset-env": "^7.25.3",
+    "@babel/runtime": "^7.25.0",
+    "@react-native-community/cli": "20.0.0",
+    "@react-native-community/cli-platform-android": "20.0.0",
+    "@react-native/babel-preset": "0.82.0",
+    "@react-native/metro-config": "0.82.0",
+    "@react-native/typescript-config": "0.82.0",
+    "@types/react": "^19.1.1",
+    "typescript": "^5.8.3"
+  },
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   }
 }
-
