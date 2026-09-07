@@ -1,4 +1,4 @@
-﻿package com.localcore
+package com.localcore
 
 import android.app.Activity
 import android.content.Intent
@@ -58,7 +58,7 @@ class BackendModule(private val reactContext: ReactApplicationContext) :
       promise.reject("PICK_BUSY", "已有选择任务进行中")
       return
     }
-    val activity = currentActivity
+    val activity = reactContext.currentActivity
     if (activity == null) {
       promise.reject("NO_ACTIVITY", "没有前台界面")
       return
@@ -78,7 +78,7 @@ class BackendModule(private val reactContext: ReactApplicationContext) :
       application.graph.exchange.importCore(Uri.parse(uriString))
       promise.resolve(application.graph.exchange.currentCoreId())
     } catch (error: Exception) {
-      promise.reject("IMPORT_CORE_FAILED", error.message, error)
+      promise.reject("IMPORT_CORE_FAILED", error.message, error).also { android.util.Log.e("Backend", "IMPORT_CORE_FAILED", error) }
     }
   }
 
@@ -87,7 +87,7 @@ class BackendModule(private val reactContext: ReactApplicationContext) :
     try {
       promise.resolve(application.graph.exchange.importModel(Uri.parse(uriString)))
     } catch (error: Exception) {
-      promise.reject("IMPORT_MODEL_FAILED", error.message, error)
+      promise.reject("IMPORT_MODEL_FAILED", error.message, error).also { android.util.Log.e("Backend", "IMPORT_MODEL_FAILED", error) }
     }
   }
 
@@ -97,7 +97,7 @@ class BackendModule(private val reactContext: ReactApplicationContext) :
       application.graph.runtime.loadModel(modelId)
       promise.resolve(null)
     } catch (error: Exception) {
-      promise.reject("LOAD_FAILED", error.message, error)
+      promise.reject("LOAD_FAILED", error.message, error).also { android.util.Log.e("Backend", "LOAD_FAILED", error) }
     }
   }
 
@@ -109,7 +109,7 @@ class BackendModule(private val reactContext: ReactApplicationContext) :
       val result = application.graph.runtime.chat(messages, org.json.JSONObject(), null)
       promise.resolve(result.text)
     } catch (error: Exception) {
-      promise.reject("CHAT_FAILED", error.message, error)
+      promise.reject("CHAT_FAILED", error.message, error).also { android.util.Log.e("Backend", "CHAT_FAILED", error) }
     }
   }
 

@@ -136,9 +136,9 @@ public final class LocalExchange {
         java.util.List<String> candidates = null;
         for (String supported : android.os.Build.SUPPORTED_ABIS) {
             java.util.List<String> matching = new java.util.ArrayList<>();
-            String prefix = "jniLibs/" + supported + "/";
+            String marker = "jniLibs/" + supported + "/";
             for (String entry : soEntries) {
-                if (entry.startsWith(prefix)) matching.add(entry);
+                if (entry.contains(marker)) matching.add(entry);
             }
             if (!matching.isEmpty()) {
                 abi = supported;

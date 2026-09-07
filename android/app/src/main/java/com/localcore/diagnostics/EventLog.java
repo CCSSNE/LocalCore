@@ -75,6 +75,7 @@ public final class EventLog {
                 listener.onEvent(event);
             }
         } catch (JSONException | IOException writeError) {
+            Log.e(TAG, "诊断事件写入失败", writeError);
             throw new IllegalStateException("无法记录诊断事件", writeError);
         }
     }
