@@ -44,9 +44,10 @@ final class MediaResolver {
     }
 
     Prepared prepare(JSONArray input) throws IOException {
-        JSONArray messages = new JSONArray(input.toString());
+        JSONArray messages;
         JSONArray paths = new JSONArray();
         try {
+            messages = new JSONArray(input.toString());
             for (int i = 0; i < messages.length(); i++) {
                 JSONObject message = messages.getJSONObject(i);
                 Object content = message.opt("content");
