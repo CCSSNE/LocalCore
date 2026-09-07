@@ -1,6 +1,7 @@
-import React, {useRef, useState} from 'react';
+import React, {useEffect, useRef, useState} from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Modal,
   NativeModules,
   Pressable,
@@ -35,6 +36,7 @@ const TITLES: Record<RouteKey, string> = {
 
 type LogLine = {kind: 'info' | 'ok' | 'fail'; text: string};
 type ChatMsg = {role: 'user' | 'ai' | 'error'; text: string};
+type ModelEntry = {id: string; name: string; paired: boolean};
 
 function pickAnd(pickLabel: string, after: (uri: string) => Promise<any>) {
   return async () => {
@@ -52,6 +54,18 @@ async function firstModelId(): Promise<string> {
   const models = state.config.models as {id: string}[];
   if (!models || models.length === 0) throw new Error('配置中没有模型');
   return models[models.length - 1].id;
+}
+
+function parseModels(root: any): ModelEntry[] {
+  const arr = root?.config?.models;
+  if (!Array.isArray(arr)) throw new Error('状态中没有 config.models');
+  return arr.map((m: any) => ({
+    id: String(m?.id ?? ''),
+    name: String(m?.name ?? m?.id ?? '未命名'),
+    paired:
+      !!(m?.mmproj && String(m.mmproj).length > 0) ||
+      (Array.isArray(m?.capabilities) && m.capabilities.includes('vision')),
+  }));
 }
 
 function ActionCard(props: {
@@ -79,12 +93,15 @@ function ActionCard(props: {
 export default function App() {
   const [route, setRoute] = useState<RouteKey>('chat');
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [chatMenuOpen, setChatMenuOpen] = useState(false);
   const [log, setLog] = useState<LogLine[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [draft, setDraft] = useState('');
   const [stateCache, setStateCache] = useState<string | null>(null);
+  const [modelList, setModelList] = useState<ModelEntry[] | null>(null);
+  const [modelError, setModelError] = useState<string | null>(null);
+  const [listLoading, setListLoading] = useState(false);
+  const [loadedId, setLoadedId] = useState<string | null>(null);
   const chatScroll = useRef<ScrollView | null>(null);
   const logScroll = useRef<ScrollView | null>(null);
 
@@ -94,10 +111,9 @@ export default function App() {
   const go = (next: RouteKey) => {
     setRoute(next);
     setDrawerOpen(false);
-    setChatMenuOpen(false);
   };
 
-  const run = (label: string, action: () => Promise<any>) => {
+  const run = (label: string, action: () => Promise<any>, afterOk?: () => void) => {
     if (busy) {
       push('fail', 'FAIL ' + label + ' => 已有任务进行中: ' + busy + '，请稍候再试');
       return;
@@ -105,9 +121,10 @@ export default function App() {
     setBusy(label);
     push('info', '>> ' + label);
     action()
-      .then((value: any) =>
-        push('ok', 'OK ' + label + (value ? ' => ' + String(value) : '')),
-      )
+      .then((value: any) => {
+        push('ok', 'OK ' + label + (value ? ' => ' + String(value) : ''));
+        afterOk?.();
+      })
       .catch((error: Error) => push('fail', 'FAIL ' + label + ' => ' + error.message))
       .finally(() => setBusy(null));
   };
@@ -119,6 +136,31 @@ export default function App() {
       return value;
     });
 
+  const fetchModels = async () => {
+    setListLoading(true);
+    try {
+      const value = String(await Backend.getBackendState());
+      const root = JSON.parse(value);
+      setModelList(parseModels(root));
+      setLoadedId(root?.runtime?.modelId ?? null);
+      setStateCache(value);
+      setModelError(null);
+    } catch (error: any) {
+      const message = error?.message ?? String(error);
+      setModelError(message);
+      push('fail', 'FAIL 刷新模型列表 => ' + message);
+    } finally {
+      setListLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (route === 'model') {
+      fetchModels();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [route]);
+
   const stateJson = (): any | null => {
     if (!stateCache) return null;
     try {
@@ -128,6 +170,11 @@ export default function App() {
       return null;
     }
   };
+
+  const importModel = () =>
+    run('导入模型', pickAnd('导入模型', uri => Backend.importModel(uri)), () => {
+      fetchModels();
+    });
 
   const sendChat = () => {
     const prompt = draft.trim();
@@ -153,6 +200,43 @@ export default function App() {
       .finally(() => setBusy(null));
   };
 
+  const logText = () => log.map(line => line.text).join('\n');
+
+  const copyLog = () => {
+    if (log.length === 0) {
+      push('fail', 'FAIL 复制日志 => 日志为空');
+      return;
+    }
+    run('复制日志', () => Backend.copyText(logText()));
+  };
+
+  const exportLog = () => {
+    if (log.length === 0) {
+      push('fail', 'FAIL 导出日志 => 日志为空');
+      return;
+    }
+    const fileName = 'localcore-log-' + Date.now() + '.log';
+    run('导出日志', () => Backend.exportLog(fileName, logText()));
+  };
+
+  const confirmDelete = (model: ModelEntry) => {
+    Alert.alert(
+      '删除模型',
+      model.name + ' 及已配对的投影将一起删除，是否继续？',
+      [
+        {text: '取消', style: 'cancel'},
+        {
+          text: '删除',
+          style: 'destructive',
+          onPress: () =>
+            run('删除模型', () => Backend.deleteModel(model.id), () => {
+              fetchModels();
+            }),
+        },
+      ],
+    );
+  };
+
   const parsed = stateJson();
 
   const renderChat = () => (
@@ -162,9 +246,6 @@ export default function App() {
         style={styles.chatList}
         contentContainerStyle={styles.chatListContent}
         onContentSizeChange={() => chatScroll.current?.scrollToEnd({animated: true})}>
-        {messages.length === 0 ? (
-          <Text style={styles.hint}>先去「模型」屏加载最新模型，再回来聊天。{"\n"}聊天走 NativeRuntime → loader → core，与旧「测试推理」同一链路。</Text>
-        ) : null}
         {messages.map((m, i) => (
           <View
             key={i}
@@ -237,48 +318,65 @@ export default function App() {
 
   const renderModel = () => (
     <ScrollView style={styles.screen} contentContainerStyle={styles.screenContent}>
-      <ActionCard
-        title="导入模型"
-        desc="选择 .gguf"
-        running={busy === '导入模型'}
-        onPress={() => run('导入模型', pickAnd('导入模型', uri => Backend.importModel(uri)))}
-      />
-      <ActionCard
-        title="为最新模型导入 MMPROJ"
-        desc="选择 .gguf 投影文件"
-        running={busy === '导入 MMPROJ'}
-        onPress={() =>
-          run(
-            '导入 MMPROJ',
-            pickAnd('导入 MMPROJ', async uri => Backend.importMmproj(uri, await firstModelId())),
-          )
-        }
-      />
-      <ActionCard
-        title="加载最新模型"
-        running={busy === '加载最新模型'}
-        onPress={() =>
-          run('加载最新模型', async () => {
-            const id = await firstModelId();
-            return Backend.loadModel(id);
-          })
-        }
-      />
-      <ActionCard
-        title="刷新模型列表"
-        running={busy === '查询状态'}
-        onPress={refreshState}
-      />
-      {parsed ? (
-        <View style={styles.statusBox}>
-          <Text style={styles.statusTitle}>config.models</Text>
-          <Text style={styles.statusText} selectable>
-            {JSON.stringify(parsed.config?.models ?? parsed.config ?? null, null, 2)}
-          </Text>
+      {listLoading && modelList === null && modelError === null ? (
+        <View style={styles.centerBox}>
+          <ActivityIndicator />
+          <Text style={styles.hint}>正在读取模型列表…</Text>
         </View>
-      ) : (
-        <Text style={styles.hint}>点「刷新模型列表」查看已导入模型。</Text>
-      )}
+      ) : null}
+      {modelError !== null ? (
+        <TouchableOpacity style={styles.statusBox} onPress={() => fetchModels()}>
+          <Text style={styles.logFail}>加载失败：{modelError}</Text>
+          <Text style={styles.hint}>点我重试</Text>
+        </TouchableOpacity>
+      ) : null}
+      {modelList !== null && modelList.length === 0 && modelError === null ? (
+        <Text style={styles.hint}>暂无已导入模型</Text>
+      ) : null}
+      {(modelList ?? []).map(model => (
+        <View key={model.id} style={styles.modelRow}>
+          <View style={styles.modelNameRow}>
+            <Text style={styles.modelName} numberOfLines={1}>
+              {model.name}
+            </Text>
+            {model.paired ? <Text style={styles.tagEye}>👁</Text> : null}
+            {loadedId === model.id ? <Text style={styles.tagLoaded}>已加载</Text> : null}
+          </View>
+          <View style={styles.rowBtns}>
+            <TouchableOpacity
+              style={styles.miniBtn}
+              disabled={!!busy}
+              onPress={() =>
+                run('加载模型', () => Backend.loadModel(model.id), () => {
+                  fetchModels();
+                })
+              }>
+              <Text>加载</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.miniBtn}
+              disabled={!!busy}
+              onPress={() =>
+                run(
+                  '配对MMPROJ',
+                  pickAnd('选择MMPROJ文件', uri => Backend.importMmproj(uri, model.id)),
+                  () => {
+                    fetchModels();
+                  },
+                )
+              }>
+              <Text>配对</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.miniBtn}
+              disabled={!!busy}
+              onPress={() => confirmDelete(model)}>
+              <Text>删除</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      ))}
+      {listLoading && modelList !== null ? <ActivityIndicator /> : null}
     </ScrollView>
   );
 
@@ -313,11 +411,17 @@ export default function App() {
   const renderLog = () => (
     <View style={styles.screen}>
       <View style={styles.logBar}>
-        <TouchableOpacity style={styles.smallBtn} onPress={refreshState}>
-          <Text>查询状态</Text>
+        <TouchableOpacity style={[styles.smallBtn, styles.logBtn]} onPress={refreshState}>
+          <Text>查询</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={styles.smallBtn} onPress={() => setLog([])}>
-          <Text>清空日志</Text>
+        <TouchableOpacity style={[styles.smallBtn, styles.logBtn]} onPress={() => setLog([])}>
+          <Text>清空</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={[styles.smallBtn, styles.logBtn]} onPress={copyLog}>
+          <Text>复制</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={[styles.smallBtn, styles.logBtn]} onPress={exportLog}>
+          <Text>导出</Text>
         </TouchableOpacity>
       </View>
       <ScrollView
@@ -351,12 +455,12 @@ export default function App() {
           <Text style={styles.iconText}>＝</Text>
         </TouchableOpacity>
         <Text style={styles.headerTitle}>{TITLES[route]}</Text>
-        {route === 'chat' ? (
-          <TouchableOpacity onPress={() => setChatMenuOpen(true)} style={styles.iconBtn}>
-            <Text style={styles.iconText}>⋮</Text>
+        {route === 'model' ? (
+          <TouchableOpacity onPress={importModel} style={styles.headerAction}>
+            <Text style={styles.headerActionText}>导入</Text>
           </TouchableOpacity>
         ) : (
-          <View style={styles.iconBtn} />
+          <View style={styles.headerAction} />
         )}
       </View>
 
@@ -388,33 +492,6 @@ export default function App() {
           </Pressable>
         </Pressable>
       </Modal>
-
-      <Modal visible={chatMenuOpen} transparent animationType="fade" onRequestClose={() => setChatMenuOpen(false)}>
-        <Pressable style={styles.menuMask} onPress={() => setChatMenuOpen(false)}>
-          <Pressable style={styles.menu} onPress={e => e.stopPropagation()}>
-            <TouchableOpacity style={styles.menuItem} onPress={() => go('model')}>
-              <Text>去模型屏</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.menuItem} onPress={() => go('core')}>
-              <Text>去核心屏</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.menuItem} onPress={() => go('backend')}>
-              <Text>去后端屏</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.menuItem} onPress={() => go('log')}>
-              <Text>去日志屏</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.menuItem}
-              onPress={() => {
-                setMessages([]);
-                setChatMenuOpen(false);
-              }}>
-              <Text>清空聊天</Text>
-            </TouchableOpacity>
-          </Pressable>
-        </Pressable>
-      </Modal>
     </View>
   );
 }
@@ -434,8 +511,11 @@ const styles = StyleSheet.create({
   headerTitle: {fontSize: 17, fontWeight: 'bold', color: '#111111'},
   iconBtn: {width: 44, height: 44, alignItems: 'center', justifyContent: 'center'},
   iconText: {fontSize: 22, color: '#111111'},
+  headerAction: {minWidth: 44, height: 44, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 8},
+  headerActionText: {fontSize: 15, color: '#1a3faa'},
   screen: {flex: 1, backgroundColor: '#ffffff'},
   screenContent: {padding: 16},
+  centerBox: {alignItems: 'center', paddingVertical: 24},
   card: {
     padding: 14,
     marginBottom: 10,
@@ -453,6 +533,28 @@ const styles = StyleSheet.create({
   statusBox: {marginTop: 8, padding: 12, borderWidth: 1, borderColor: '#e0e0e0', borderRadius: 10},
   statusTitle: {fontSize: 13, fontWeight: 'bold', color: '#333333', marginTop: 8},
   statusText: {fontSize: 12, color: '#333333', marginTop: 4},
+  modelRow: {
+    padding: 12,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#dddddd',
+    borderRadius: 10,
+    backgroundColor: '#f7f7f7',
+  },
+  modelNameRow: {flexDirection: 'row', alignItems: 'center', marginBottom: 8},
+  modelName: {flex: 1, fontSize: 15, color: '#111111', fontWeight: '600'},
+  tagEye: {fontSize: 15, marginLeft: 6},
+  tagLoaded: {fontSize: 12, color: '#1a3faa', marginLeft: 6, fontWeight: '700'},
+  rowBtns: {flexDirection: 'row'},
+  miniBtn: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderWidth: 1,
+    borderColor: '#cccccc',
+    borderRadius: 8,
+    marginRight: 8,
+    backgroundColor: '#ffffff',
+  },
   chatList: {flex: 1},
   chatListContent: {padding: 16},
   bubble: {padding: 10, borderRadius: 10, marginBottom: 8, maxWidth: '85%', alignSelf: 'flex-start'},
@@ -477,6 +579,7 @@ const styles = StyleSheet.create({
   sendText: {color: '#ffffff', fontWeight: '600'},
   logBar: {flexDirection: 'row', padding: 12, borderBottomWidth: 1, borderBottomColor: '#e5e5e5'},
   smallBtn: {paddingHorizontal: 12, paddingVertical: 8, borderWidth: 1, borderColor: '#dddddd', borderRadius: 8, marginRight: 8},
+  logBtn: {flex: 1, alignItems: 'center', marginRight: 8},
   logList: {flex: 1},
   logText: {fontSize: 13, marginBottom: 4},
   logInfo: {color: '#333333'},
@@ -490,7 +593,4 @@ const styles = StyleSheet.create({
   drawerText: {fontSize: 15, color: '#333333'},
   drawerTextActive: {color: '#1a3faa', fontWeight: '700'},
   drawerFoot: {marginTop: 24, marginLeft: 8, fontSize: 12, color: '#999999'},
-  menuMask: {flex: 1, backgroundColor: 'rgba(0,0,0,0.15)'},
-  menu: {position: 'absolute', top: 92, right: 8, backgroundColor: '#ffffff', borderRadius: 10, borderWidth: 1, borderColor: '#e0e0e0', minWidth: 170, paddingVertical: 6, elevation: 4},
-  menuItem: {paddingVertical: 12, paddingHorizontal: 16},
 });
