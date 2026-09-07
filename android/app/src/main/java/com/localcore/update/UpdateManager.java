@@ -59,15 +59,16 @@ public final class UpdateManager {
     private final List<Listener> listeners = new CopyOnWriteArrayList<>();
     private final AtomicBoolean checking = new AtomicBoolean();
     private ScheduledFuture<?> scheduled;
+    private String scheduledPolicy;
     private volatile State state = new State(Phase.IDLE, null, null);
 
     public UpdateManager(ConfigRepository config, ResourceManager resources, EventLog events) {
         this.config = config;
         this.resources = resources;
         this.events = events;
-        config.addListener(ignored -> schedule());
+        config.addListener(this::schedule);
         resources.addListener(this::onResourceState);
-        schedule();
+        schedule(config.current());
     }
 
     public State state() { return state; }
@@ -85,10 +86,13 @@ public final class UpdateManager {
         });
     }
 
-    private synchronized void schedule() {
-        if (scheduled != null) scheduled.cancel(false);
-        JSONObject policy = config.current().optJSONObject("coreUpdates");
+    private synchronized void schedule(JSONObject configuration) {
+        JSONObject policy = configuration.optJSONObject("coreUpdates");
         if (policy == null || !policy.optBoolean("enabled")) {
+            if ("disabled".equals(scheduledPolicy)) return;
+            if (scheduled != null) scheduled.cancel(false);
+            scheduled = null;
+            scheduledPolicy = "disabled";
             setState(new State(Phase.DISABLED, state.version, null));
             return;
         }
@@ -98,6 +102,10 @@ public final class UpdateManager {
         } catch (org.json.JSONException error) {
             throw new IllegalStateException("coreUpdates.checkIntervalMinutes 无效", error);
         }
+        String policyKey = policy.optString("manifestUrl") + "\n" + interval;
+        if (policyKey.equals(scheduledPolicy)) return;
+        if (scheduled != null) scheduled.cancel(false);
+        scheduledPolicy = policyKey;
         scheduled = executor.scheduleWithFixedDelay(this::scheduledCheck, 0, interval, TimeUnit.MINUTES);
         setState(new State(Phase.IDLE, state.version, null));
     }
@@ -141,17 +149,32 @@ public final class UpdateManager {
         JSONObject next = config.current();
         JSONArray current = next.getJSONArray("resources");
         JSONArray merged = new JSONArray();
+        boolean changed = false;
+        boolean found = false;
         for (int i = 0; i < current.length(); i++) {
             JSONObject item = current.getJSONObject(i);
-            if (!descriptor.getString("id").equals(item.optString("id"))) merged.put(item);
+            if (descriptor.getString("id").equals(item.optString("id"))) {
+                found = true;
+                merged.put(descriptor);
+                if (!item.toString().equals(descriptor.toString())) changed = true;
+            } else {
+                merged.put(item);
+            }
         }
-        merged.put(descriptor);
+        if (!found) {
+            merged.put(descriptor);
+            changed = true;
+        }
         next.put("resources", merged);
         JSONArray models = next.getJSONArray("models");
         for (int i = 0; i < models.length(); i++) {
-            models.getJSONObject(i).put("core", descriptor.getString("id"));
+            JSONObject model = models.getJSONObject(i);
+            if (!descriptor.getString("id").equals(model.optString("core"))) {
+                model.put("core", descriptor.getString("id"));
+                changed = true;
+            }
         }
-        config.activate(next.toString());
+        if (changed) config.activate(next.toString());
     }
 
     private void onResourceState(ResourceState resource) {

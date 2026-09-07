@@ -21,6 +21,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Iterator;
@@ -59,8 +61,8 @@ public final class ResourceManager {
         ensureDirectory(root);
         ensureDirectory(downloads);
         loadStates();
-        reconcile();
-        config.addListener(ignored -> reconcile());
+        reconcile(true);
+        config.addListener(ignored -> reconcile(false));
     }
 
     public synchronized List<ResourceState> states() {
@@ -109,6 +111,7 @@ public final class ResourceManager {
             ResourceState existing = states.get(id);
             if (existing != null && (existing.status == ResourceState.Status.QUEUED
                     || existing.status == ResourceState.Status.DOWNLOADING)) {
+                if (listener == null && descriptor.optString("version").equals(existing.targetVersion)) return;
                 throw new IllegalStateException("资源任务已在执行: " + id);
             }
             String activeVersion = existing != null && existing.usable() ? existing.version : null;
@@ -209,9 +212,18 @@ public final class ResourceManager {
             File partial = partialFile(id, descriptor.optString("version"));
             long existing = partial.isFile() ? partial.length() : 0;
             long total = source.optLong("size");
+            if (existing > 0 && total > 0 && (existing > total
+                    || (existing == total && !matchesIntegrity(partial, source)))) {
+                events.info("resource", "丢弃尺寸或摘要不匹配的断点文件 " + id);
+                if (!partial.delete()) throw new IOException("无法删除损坏的断点文件: " + partial);
+                existing = 0;
+            }
             ResourceState active = activeState(id);
             update(taskState(descriptor, active, ResourceState.Status.DOWNLOADING, existing, total, null));
-            transfer(source.optString("url"), partial, existing, total, descriptor);
+            if (total <= 0 || existing != total) {
+                transfer(source.optString("url"), partial, existing, total, descriptor);
+            }
+            verifyIntegrity(partial, source);
             installed = activate(descriptor, source, partial);
             update(new ResourceState(id, descriptor.optString("type"), descriptor.optString("version"),
                     descriptor.optString("version"), ResourceState.Status.INSTALLED,
@@ -393,15 +405,15 @@ public final class ResourceManager {
         }
     }
 
-    private synchronized void reconcile() {
+    private synchronized void reconcile(boolean recoverInterruptedTasks) {
         List<String> invalid = new ArrayList<>();
         for (Map.Entry<String, ResourceState> item : states.entrySet()) {
             ResourceState state = item.getValue();
             if (state.status == ResourceState.Status.INSTALLED
                     && (state.path == null || !new File(state.path).isFile())) {
                 invalid.add(item.getKey());
-            } else if (state.status == ResourceState.Status.DOWNLOADING
-                    || state.status == ResourceState.Status.QUEUED) {
+            } else if (recoverInterruptedTasks && (state.status == ResourceState.Status.DOWNLOADING
+                    || state.status == ResourceState.Status.QUEUED)) {
                 JSONObject descriptor = findDescriptor(item.getKey());
                 if (descriptor != null) {
                     File partial = partialFile(item.getKey(), state.targetVersion);
@@ -466,6 +478,43 @@ public final class ResourceManager {
 
     private File partialFile(String id, String version) {
         return new File(downloads, id + "@" + version.replaceAll("[^A-Za-z0-9._-]", "_") + ".part");
+    }
+
+    private static boolean matchesIntegrity(File file, JSONObject source) throws IOException {
+        try {
+            verifyIntegrity(file, source);
+            return true;
+        } catch (IOException error) {
+            return false;
+        }
+    }
+
+    private static void verifyIntegrity(File file, JSONObject source) throws IOException {
+        long expectedSize = source.optLong("size");
+        if (expectedSize > 0 && file.length() != expectedSize) {
+            throw new IOException("资源尺寸不一致: expected=" + expectedSize + ", actual=" + file.length());
+        }
+        String expectedHash = source.optString("sha256");
+        if (expectedHash.isEmpty()) return;
+        final MessageDigest digest;
+        try {
+            digest = MessageDigest.getInstance("SHA-256");
+        } catch (NoSuchAlgorithmException error) {
+            throw new IllegalStateException("系统不支持 SHA-256", error);
+        }
+        try (InputStream input = new BufferedInputStream(new FileInputStream(file))) {
+            byte[] buffer = new byte[128 * 1024];
+            int count;
+            while ((count = input.read(buffer)) != -1) digest.update(buffer, 0, count);
+        }
+        StringBuilder actual = new StringBuilder(64);
+        for (byte value : digest.digest()) {
+            actual.append(Character.forDigit((value >>> 4) & 0x0f, 16));
+            actual.append(Character.forDigit(value & 0x0f, 16));
+        }
+        if (!expectedHash.equalsIgnoreCase(actual.toString())) {
+            throw new IOException("资源 SHA-256 不一致: expected=" + expectedHash + ", actual=" + actual);
+        }
     }
 
     private static void ensureDirectory(File directory) {
