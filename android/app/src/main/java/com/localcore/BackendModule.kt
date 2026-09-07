@@ -12,7 +12,7 @@ import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
-import com.facebook.react.modules.core.DeviceEventEmitterModule
+import com.facebook.react.modules.core.DeviceEventManagerModule
 import com.localcore.runtime.RuntimeManager
 import com.localcore.runtime.RuntimeState
 import com.localcore.service.BackendService
@@ -166,7 +166,7 @@ class BackendModule(private val reactContext: ReactApplicationContext) :
           org.json.JSONObject().put("role", "user").put("content", content))
     }
     // 单飞行：JS 侧 busy 锁保证同一时间只有一个流，无需 id 分流。
-    val emitter = reactContext.getJSModule(DeviceEventEmitterModule.RCTDeviceEventEmitter::class.java)
+    val emitter = reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
     val result = application.graph.runtime.chat(messages, org.json.JSONObject(),
         RuntimeManager.TokenConsumer { token ->
           emitter.emit("LocalCoreChatToken", token)
