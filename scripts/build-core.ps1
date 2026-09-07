@@ -1,7 +1,7 @@
 param(
     [string]$LlamaTag = 'v0.4.0',
     [string]$LlamaCommit = '5266f24da75dc449bd56cbed7addb9c8e4a6a73e',
-    [string]$CoreVersion = '0.4.0-localcore.7',
+    [string]$CoreVersion = '0.4.0-localcore.10',
     [string[]]$Abis = @('arm64-v8a', 'x86_64'),
     [int]$Parallel = 4
 )
