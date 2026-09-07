@@ -204,6 +204,7 @@ export default function App() {
   const [coreError, setCoreError] = useState<string | null>(null);
   const [coreLoading, setCoreLoading] = useState(false);
   const [updateStatus, setUpdateStatus] = useState<string | null>(null);
+  const [updateProgress, setUpdateProgress] = useState<number | null>(null);
   const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pollActive = useRef(false);
   const [backendInfo, setBackendInfo] = useState<{running: boolean; address: string | null; error: string | null} | null>(null);
@@ -367,32 +368,59 @@ export default function App() {
   const pollUpdate = async () => {
     stopPoll();
     pollActive.current = true;
+    setUpdateProgress(null);
     const step = async () => {
       if (!pollActive.current) return;
       try {
         const root = JSON.parse(String(await Backend.getBackendState()));
         const cu = root?.coreUpdate ?? {};
         const phase = String(cu.phase ?? '');
+        // 唯一进度数据源：ResourceManager 经 resourceStates 透出的 downloaded/total。
+        // UpdateManager.State 只有 phase/version/error，没有进度，直接读它只能显示纯文本。
+        const states = Array.isArray(root?.resourceStates) ? root.resourceStates : [];
+        const coreRs = states.find((r: any) => r?.id === 'localcore.core');
+        const downloaded = Number(coreRs?.downloaded ?? NaN);
+        const total = Number(coreRs?.total ?? NaN);
+        const ratio =
+          Number.isFinite(downloaded) && Number.isFinite(total) && total > 0
+            ? Math.min(1, Math.max(0, downloaded / total))
+            : null;
+        const fmtMB = (bytes: number) => `${(bytes / 1048576).toFixed(1)}MB`;
         if (phase === 'checking') {
           setUpdateStatus('正在检查更新…');
+          setUpdateProgress(null);
         } else if (phase === 'downloading') {
-          setUpdateStatus(`正在下载核心 ${cu.version ?? ''}…`);
+          if (ratio !== null) {
+            const sizeTxt =
+              Number.isFinite(downloaded) && Number.isFinite(total)
+                ? ` ${fmtMB(downloaded)}/${fmtMB(total)}`
+                : '';
+            setUpdateStatus(`正在下载核心 ${cu.version ?? ''}${sizeTxt} ${(ratio * 100).toFixed(1)}%`);
+            setUpdateProgress(ratio);
+          } else {
+            setUpdateStatus(`正在下载核心 ${cu.version ?? ''}…`);
+            setUpdateProgress(null);
+          }
         } else if (phase === 'failed') {
           setUpdateStatus(`更新失败：${cu.error ?? '未知错误'}`);
+          setUpdateProgress(null);
           stopPoll();
           return;
         } else if (phase === 'disabled') {
           setUpdateStatus('更新已禁用');
+          setUpdateProgress(null);
           stopPoll();
           return;
         } else {
           setUpdateStatus(cu.version ? `已是最新 ${cu.version}` : '就绪');
+          setUpdateProgress(cu.version ? 1 : null);
           fetchCore();
           stopPoll();
           return;
         }
       } catch (e: any) {
         setUpdateStatus(`状态读取失败：${e?.message ?? String(e)}`);
+        setUpdateProgress(null);
         stopPoll();
         return;
       }
@@ -987,7 +1015,13 @@ export default function App() {
       </View>
       {updateStatus !== null ? (
         <View style={styles.updateBar}>
-          <Text style={styles.cardSub} selectable>
+          {updateProgress !== null ? (
+            <View
+              style={[styles.updateBarFill, {width: `${Math.round(updateProgress * 100)}%`}]}
+              pointerEvents="none"
+            />
+          ) : null}
+          <Text style={[styles.cardSub, styles.updateBarText]} selectable>
             {updateStatus}
           </Text>
         </View>
@@ -1498,7 +1532,17 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#e5e5e5',
     backgroundColor: '#f7f7f7',
+    position: 'relative',
+    overflow: 'hidden',
   },
+  updateBarFill: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    bottom: 0,
+    backgroundColor: '#cfe0ff',
+  },
+  updateBarText: {position: 'relative', zIndex: 1},
   btn: {
     paddingHorizontal: 16,
     paddingVertical: 8,
