@@ -455,6 +455,7 @@ export default function App() {
       if (!piece) return;
       setProgressMsg('');
       prefillComplete.current = true;
+      push('info', piece);
       setMessages(prev => {
         if (prev.length === 0) return prev;
         const last = prev[prev.length - 1];
@@ -637,7 +638,7 @@ export default function App() {
         setStageMsg('');
         setProgressMsg('');
         prefillComplete.current = true;
-        push('ok', 'OK ' + label + ' => ' + text);
+        push('ok', 'OK ' + label);
       })
       .catch((error: Error) => {
         setMessages(prev => {
