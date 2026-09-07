@@ -156,6 +156,9 @@ export default function App() {
   const [coreInfo, setCoreInfo] = useState<{id: string; version: string} | null>(null);
   const [coreError, setCoreError] = useState<string | null>(null);
   const [coreLoading, setCoreLoading] = useState(false);
+  const [updateStatus, setUpdateStatus] = useState<string | null>(null);
+  const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pollActive = useRef(false);
   const [backendInfo, setBackendInfo] = useState<{running: boolean; address: string | null; error: string | null} | null>(null);
   const [backendError, setBackendError] = useState<string | null>(null);
   const [backendLoading, setBackendLoading] = useState(false);
@@ -233,6 +236,51 @@ export default function App() {
     }
   };
 
+  const stopPoll = () => {
+    pollActive.current = false;
+    if (pollTimer.current) {
+      clearTimeout(pollTimer.current);
+      pollTimer.current = null;
+    }
+  };
+
+  const pollUpdate = async () => {
+    stopPoll();
+    pollActive.current = true;
+    const step = async () => {
+      if (!pollActive.current) return;
+      try {
+        const root = JSON.parse(String(await Backend.getBackendState()));
+        const cu = root?.coreUpdate ?? {};
+        const phase = String(cu.phase ?? '');
+        if (phase === 'checking') {
+          setUpdateStatus('正在检查更新…');
+        } else if (phase === 'downloading') {
+          setUpdateStatus(`正在下载核心 ${cu.version ?? ''}…`);
+        } else if (phase === 'failed') {
+          setUpdateStatus(`更新失败：${cu.error ?? '未知错误'}`);
+          stopPoll();
+          return;
+        } else if (phase === 'disabled') {
+          setUpdateStatus('更新已禁用');
+          stopPoll();
+          return;
+        } else {
+          setUpdateStatus(cu.version ? `已是最新 ${cu.version}` : '就绪');
+          fetchCore();
+          stopPoll();
+          return;
+        }
+      } catch (e: any) {
+        setUpdateStatus(`状态读取失败：${e?.message ?? String(e)}`);
+        stopPoll();
+        return;
+      }
+      pollTimer.current = setTimeout(step, 1000);
+    };
+    step();
+  };
+
   const fetchBackend = async () => {
     setBackendLoading(true);
     try {
@@ -280,6 +328,9 @@ export default function App() {
     if (route === 'backend') {
       fetchBackend();
     }
+    return () => {
+      stopPoll();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [route]);
 
@@ -296,6 +347,7 @@ export default function App() {
   const updateCore = () =>
     run('从仓库 Release 下载/更新核心', () => Backend.checkCoreUpdate(), () => {
       fetchCore();
+      pollUpdate();
     });
 
   const startBackend = () =>
@@ -504,6 +556,13 @@ export default function App() {
           <Text>从下载更新</Text>
         </TouchableOpacity>
       </View>
+      {updateStatus !== null ? (
+        <View style={styles.updateBar}>
+          <Text style={styles.cardSub} selectable>
+            {updateStatus}
+          </Text>
+        </View>
+      ) : null}
       <ScrollView style={styles.chatList} contentContainerStyle={styles.screenContent}>
         {coreLoading && coreInfo === null && coreError === null ? (
           <View style={styles.centerBox}>
@@ -815,6 +874,13 @@ const styles = StyleSheet.create({
   centerBox: {alignItems: 'center', paddingVertical: 24},
   hint: {fontSize: 13, color: '#666666', lineHeight: 20},
   actionBar: {flexDirection: 'row', padding: 12, borderBottomWidth: 1, borderBottomColor: '#e5e5e5'},
+  updateBar: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e5e5e5',
+    backgroundColor: '#f7f7f7',
+  },
   btn: {
     paddingHorizontal: 16,
     paddingVertical: 8,
