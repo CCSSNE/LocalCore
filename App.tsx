@@ -1576,9 +1576,8 @@ const styles = StyleSheet.create({
   centerBox: {alignItems: 'center', paddingVertical: 24},
   hint: {fontSize: 13, color: '#666666', lineHeight: 20},
   actionBar: {flexDirection: 'row', padding: 12, borderBottomWidth: 1, borderBottomColor: '#e5e5e5'},
+  // 填充条 width 百分比按容器内容盒结算，容器禁一切内边距，否则满格也盖不住 padding 区。
   updateBar: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
     borderBottomWidth: 1,
     borderBottomColor: '#e5e5e5',
     backgroundColor: '#f7f7f7',
@@ -1592,7 +1591,7 @@ const styles = StyleSheet.create({
     bottom: 0,
     backgroundColor: '#cfe0ff',
   },
-  updateBarText: {position: 'relative', zIndex: 1},
+  updateBarText: {position: 'relative', zIndex: 1, paddingHorizontal: 12, paddingVertical: 8},
   btn: {
     paddingHorizontal: 16,
     paddingVertical: 8,
