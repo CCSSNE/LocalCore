@@ -172,7 +172,10 @@ public final class LocalHttpServer {
         if (stream) {
             output.startEvents();
             RuntimeManager.Result result = runtime.complete(prompt, request,
-                    token -> output.event(completionChunk(completionId, created, modelId, token, null).toString()));
+                    token -> {
+                        output.event(completionChunk(completionId, created, modelId, token, null).toString());
+                        return true;
+                    });
             output.event(completionChunk(completionId, created, modelId, "", "stop").toString());
             output.event("[DONE]");
         } else {
@@ -351,4 +354,3 @@ public final class LocalHttpServer {
         }
     }
 }
-

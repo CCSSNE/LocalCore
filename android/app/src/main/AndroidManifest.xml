@@ -9,7 +9,6 @@
     <application
         android:name=".LocalCoreApplication"
         android:allowBackup="false"
-        android:extractNativeLibs="true"
         android:label="LocalCore"
         android:networkSecurityConfig="@xml/network_security_config"
         android:supportsRtl="true"
@@ -33,4 +32,3 @@
         </service>
     </application>
 </manifest>
-
