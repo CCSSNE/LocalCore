@@ -150,6 +150,18 @@ function EyeIcon() {
   );
 }
 
+const NUM_FIELDS: Array<{key: string; label: string; group: 'load' | 'inference'; int: boolean}> = [
+  {key: 'contextSize', label: '上下文长度', group: 'load', int: true},
+  {key: 'batchSize', label: '批大小', group: 'load', int: true},
+  {key: 'threads', label: '线程数', group: 'load', int: true},
+  {key: 'gpuLayers', label: 'GPU 层数（-1 自动）', group: 'load', int: true},
+  {key: 'maxTokens', label: '最大生成数', group: 'inference', int: true},
+  {key: 'temperature', label: '温度', group: 'inference', int: false},
+  {key: 'topP', label: 'Top-P', group: 'inference', int: false},
+  {key: 'topK', label: 'Top-K', group: 'inference', int: true},
+  {key: 'seed', label: '随机种子（-1 随机）', group: 'inference', int: true},
+];
+
 export default function App() {
   const [route, setRoute] = useState<RouteKey>('chat');
   const [drawerOpen, setDrawerOpen] = useState(false);
