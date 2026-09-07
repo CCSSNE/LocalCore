@@ -41,7 +41,7 @@ const TITLES: Record<RouteKey, string> = {
 
 type LogLine = {kind: 'info' | 'ok' | 'fail'; text: string};
 type ChatMsg = {role: 'user' | 'ai' | 'error'; text: string; imageUri?: string | null; live?: boolean; stats?: TurnStats};
-type TurnStats = {inT: number; cached: number; out: number; ttft: number; llm: number; ctx: number};
+type TurnStats = {inT: number; cached: number; out: number; ttft: number; llm: number};
 
 // 单轮统计算式照搬 legadoC AiUsageFormat：千分位 + t，时长 ms/s/m，速度 t/s，单耗 ms/t。
 function fmtCount(n: number): string {
@@ -72,20 +72,16 @@ function fmtMsPerTok(ms: number, tok: number): string {
 
 function StatsStrip({stats}: {stats: TurnStats}) {
   const [open, setOpen] = useState(false);
-  const lines = [
-    `total-${fmtCount(stats.inT + stats.out)} ${fmtSpeed(stats.out, stats.llm)} ${fmtDur(stats.ttft)}`,
-    `in-${fmtCount(stats.inT)} c-${fmtCount(stats.cached)} ${fmtSpeed(stats.inT, stats.ttft)} ${fmtMsPerTok(stats.ttft, stats.inT)} ${fmtDur(stats.ttft)}`,
-    `ctx-${fmtCount(stats.ctx)}`,
-    `out-${fmtCount(stats.out)} ${fmtSpeed(stats.out, stats.llm)} ${fmtMsPerTok(stats.llm, stats.out)} ${fmtDur(stats.llm)}`,
-    `total-${fmtCount(stats.inT + stats.out)}`,
-  ];
+  const head = `total-${fmtCount(stats.inT + stats.out)} ${fmtSpeed(stats.out, stats.llm)} ${fmtDur(stats.ttft)}`;
+  const body =
+    `in-${fmtCount(stats.inT)} c-${fmtCount(stats.cached)} ${fmtSpeed(stats.inT, stats.ttft)} ${fmtMsPerTok(stats.ttft, stats.inT)} ${fmtDur(stats.ttft)}` +
+    `\nout-${fmtCount(stats.out)} ${fmtSpeed(stats.out, stats.llm)} ${fmtMsPerTok(stats.llm, stats.out)} ${fmtDur(stats.llm)}` +
+    `\ntotal-${fmtCount(stats.inT + stats.out)}`;
   return (
     <TouchableOpacity onPress={() => setOpen(v => !v)} style={styles.statsBox}>
       <Text style={styles.statsText}>
-        {lines[0]}
-        {open ? ' ▲' : ' ▼'}
+        {open ? body + ' ▲' : head + ' ▼'}
       </Text>
-      {open ? <Text style={styles.statsText}>{lines.slice(1).join('\n')}</Text> : null}
     </TouchableOpacity>
   );
 }
@@ -397,7 +393,6 @@ export default function App() {
           out: Number(result?.completionTokens ?? 0),
           ttft: Number(result?.ttftMs ?? 0),
           llm: Number(result?.llmMs ?? 0),
-          ctx: Number(result?.promptTokens ?? 0),
         };
         setMessages(prev => {
           if (prev.length === 0) return [...prev, {role: 'ai', text, stats}];
