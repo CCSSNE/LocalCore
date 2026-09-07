@@ -8,7 +8,6 @@ import {
   NativeModules,
   Pressable,
   ScrollView,
-  StatusBar,
   StyleSheet,
   Text,
   TextInput,
@@ -1505,7 +1504,7 @@ export default function App() {
       <Modal visible={drawerOpen} transparent animationType="fade" onRequestClose={() => setDrawerOpen(false)}>
         <Pressable style={styles.drawerMask} onPress={() => setDrawerOpen(false)}>
           <Pressable
-            style={[styles.drawer, {paddingTop: (StatusBar.currentHeight ?? 24) + 8}]}
+            style={[styles.drawer, {paddingTop: 8}]} // Modal内容起点已在状态栏下方, 不再叠加状态栏高度
             onPress={e => e.stopPropagation()}>
             <Text style={styles.drawerTitle}>LocalCore</Text>
             {ROUTES.map(r => (
@@ -1635,7 +1634,7 @@ export default function App() {
       {rightOpen ? (
         <Pressable style={styles.rightMask} onPress={closeRightDrawer}>
           <Pressable
-            style={[styles.rightDrawer, {paddingTop: (StatusBar.currentHeight ?? 24) + 8}]}
+            style={[styles.rightDrawer, {paddingTop: 8}]}
             onPress={e => e.stopPropagation()}>
             <View style={styles.rightHead}>
               <Text style={styles.drawerTitle}>推理设置</Text>
@@ -1920,7 +1919,7 @@ const styles = StyleSheet.create({
   logFail: {color: '#b00020'},
   drawerMask: {flex: 1, backgroundColor: 'rgba(0,0,0,0.3)', flexDirection: 'row'},
   drawer: {width: 280, backgroundColor: '#ffffff', paddingHorizontal: 12},
-  drawerTitle: {fontSize: 18, fontWeight: 'bold', marginBottom: 16, marginLeft: 8, color: '#111111'},
+  drawerTitle: {fontSize: 18, fontWeight: 'bold', marginBottom: 8, marginLeft: 8, color: '#111111'},
   drawerItem: {paddingVertical: 12, paddingHorizontal: 10, borderRadius: 8},
   drawerItemActive: {backgroundColor: '#e8eefc'},
   drawerText: {fontSize: 15, color: '#333333'},
