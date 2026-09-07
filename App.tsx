@@ -19,7 +19,7 @@ function pickAnd(pickLabel: string, after: (uri: string) => Promise<any>) {
 
 async function firstModelId(): Promise<string> {
   const state = JSON.parse(await Backend.getBackendState());
-  const models = JSON.parse(state.config).models as {id: string}[];
+  const models = state.config.models as {id: string}[];
   if (!models || models.length === 0) throw new Error('配置中没有模型');
   return models[models.length - 1].id;
 }
