@@ -21,7 +21,7 @@ const {Backend} = NativeModules;
 const chatEvents = new NativeEventEmitter(NativeModules.Backend);
 const CHAT_KEY = 'localcore.chat.v1';
 const SETTINGS_KEY = 'localcore.settings.v1';
-const DEFAULT_BUDGET_PX = 1000000;
+const DEFAULT_BUDGET_PX = 100000;
 
 type RouteKey = 'chat' | 'core' | 'model' | 'backend' | 'log';
 
@@ -44,8 +44,14 @@ const TITLES: Record<RouteKey, string> = {
 };
 
 type LogLine = {kind: 'info' | 'ok' | 'fail'; text: string};
-type ChatMsg = {role: 'user' | 'ai' | 'error'; text: string; imageUri?: string | null; live?: boolean; stats?: TurnStats};
+type ChatMsg = {role: 'user' | 'ai' | 'error'; text: string; imageUris?: string[]; imageUri?: string | null; live?: boolean; stats?: TurnStats};
 type TurnStats = {inT: number; out: number; ttft: number; llm: number};
+
+function msgImageUris(m: ChatMsg): string[] {
+  if (Array.isArray(m.imageUris)) return m.imageUris.filter(u => typeof u === 'string' && u.length > 0);
+  if (typeof m.imageUri === 'string' && m.imageUri) return [m.imageUri];
+  return [];
+}
 
 // 单轮统计算式照搬 legadoC AiUsageFormat：千分位 + t，时长 ms/s/m，速度 t/s，单耗 ms/t。
 function fmtCount(n: number): string {
@@ -152,8 +158,8 @@ export default function App() {
   const [busy, setBusy] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [draft, setDraft] = useState('');
-  const [pendingImage, setPendingImage] = useState<string | null>(null);
-  const [viewerUri, setViewerUri] = useState<string | null>(null);
+  const [pendingImages, setPendingImages] = useState<string[]>([]);
+  const [viewerData, setViewerData] = useState<{uris: string[]; index: number} | null>(null);
   const [stageMsg, setStageMsg] = useState('');
   const [progressMsg, setProgressMsg] = useState('');
   const [chatGate, setChatGate] = useState<{loading: boolean; models: number; loaded: boolean}>({
@@ -162,7 +168,7 @@ export default function App() {
     loaded: false,
   });
   const [budgetPx, setBudgetPx] = useState(DEFAULT_BUDGET_PX);
-  const [budgetWan, setBudgetWan] = useState('100');
+  const [budgetWan, setBudgetWan] = useState('10');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [coreRt, setCoreRt] = useState<{cuPhase: string | null; cuError: string | null}>({
     cuPhase: null,
@@ -186,6 +192,8 @@ export default function App() {
   const chatScroll = useRef<ScrollView | null>(null);
   const logScroll = useRef<ScrollView | null>(null);
   const chatScrollSig = useRef<string>('');
+  // 是否跟随输出追到最下面：用户主动上滑即停，滑回底部再恢复。
+  const followOutput = useRef(true);
 
   const push = (kind: LogLine['kind'], text: string) =>
     setLog(prev => [...prev, {kind, text: `[${fmtClock(new Date())}] ${text}`}]);
@@ -389,7 +397,12 @@ export default function App() {
         for (const item of parsed) {
           if (item == null || (item.role !== 'user' && item.role !== 'ai' && item.role !== 'error')) continue;
           const msg: ChatMsg = {role: item.role, text: String(item.text ?? '')};
-          if (typeof item.imageUri === 'string' && item.imageUri) msg.imageUri = item.imageUri;
+          if (Array.isArray((item as any).imageUris)) {
+            const uris = ((item as any).imageUris as any[]).filter(u => typeof u === 'string' && u);
+            if (uris.length > 0) msg.imageUris = uris;
+          } else if (typeof (item as any).imageUri === 'string' && (item as any).imageUri) {
+            msg.imageUris = [String((item as any).imageUri)];
+          }
           if (item.role === 'ai' && item.stats != null && typeof item.stats === 'object') {
             msg.stats = {
               inT: Number(item.stats.inT ?? 0),
@@ -504,30 +517,73 @@ export default function App() {
       fetchBackend();
     });
 
+  const isStoredFileUri = (uri: string) => uri.startsWith('file:');
+
+  const deleteStoredUri = async (uri: string) => {
+    if (!isStoredFileUri(uri)) return;
+    await Backend.deleteStoredImage(uri);
+  };
+
+  const removePendingImage = (uri: string) => {
+    setPendingImages(prev => prev.filter(u => u !== uri));
+    deleteStoredUri(uri).catch((e: any) =>
+      push('fail', 'FAIL 删除待发送图片 => ' + (e?.message ?? String(e))),
+    );
+  };
+
+  const clearChat = () => {
+    const uris: string[] = [];
+    for (const m of messages) {
+      for (const u of msgImageUris(m)) uris.push(u);
+    }
+    for (const u of pendingImages) uris.push(u);
+    setMessages([]);
+    setPendingImages([]);
+    setChatMenuOpen(false);
+    (async () => {
+      for (const uri of uris) {
+        try {
+          await deleteStoredUri(uri);
+        } catch (e: any) {
+          push('fail', 'FAIL 删除存入图片 => ' + (e?.message ?? String(e)));
+        }
+      }
+    })();
+  };
+
   const pickImage = () =>
     run(
       '选择图片',
       pickAnd('选择图片', async uri => {
-        setPendingImage(uri);
-        return uri;
+        const stored: string = String(await Backend.prepareChatImage(uri, budgetPx));
+        setPendingImages(prev => [...prev, stored]);
+        return stored;
       }),
     );
 
   const sendChat = () => {
     const prompt = draft.trim();
-    if ((!prompt && !pendingImage) || busy) return;
-    const image = pendingImage;
+    if ((!prompt && pendingImages.length === 0) || busy) return;
+    const images = [...pendingImages];
     setDraft('');
-    setMessages(prev => [...prev, {role: 'user', text: prompt, imageUri: image}]);
+    setPendingImages([]);
+    followOutput.current = true;
+    chatScrollSig.current = '';
+    setMessages(prev => [
+      ...prev,
+      ...(images.length > 0
+        ? [{role: 'user' as const, text: prompt, imageUris: images}]
+        : [{role: 'user' as const, text: prompt}]),
+    ]);
     setMessages(prev => [...prev, {role: 'ai', text: '', live: true}]);
     setStageMsg('');
     setProgressMsg('');
     const label = '聊天推理';
     setBusy(label);
-    push('info', '>> ' + label + '：' + prompt + (image ? ' [图片]' : ''));
+    push('info', '>> ' + label + '：' + prompt + (images.length > 0 ? ` [${images.length}张图片]` : ''));
     (async () => {
       const id = await firstModelId();
-      const raw = String(await Backend.chatStream(id, prompt, image ?? null, budgetPx));
+      const raw = String(await Backend.chatStreamMulti(id, prompt, images.length > 0 ? images : null, budgetPx));
       return JSON.parse(raw);
     })()
       .then((result: any) => {
@@ -546,7 +602,6 @@ export default function App() {
           next[next.length - 1] = {role: 'ai', text, stats};
           return next;
         });
-        if (image) setPendingImage(null);
         setStageMsg('');
         setProgressMsg('');
         push('ok', 'OK ' + label + ' => ' + text);
@@ -565,6 +620,14 @@ export default function App() {
         push('fail', 'FAIL ' + label + ' => ' + error.message);
       })
       .finally(() => setBusy(null));
+  };
+
+  const stopChat = () => {
+    if (busy !== '聊天推理') return;
+    push('info', '>> 停止推理');
+    Backend.stopChat()
+      .then(() => push('info', '·· 已发送停止信号，等待核心收尾'))
+      .catch((error: any) => push('fail', 'FAIL 停止推理 => ' + (error?.message ?? String(error))));
   };
 
   const logText = () => log.map(line => line.text).join('\n');
@@ -628,20 +691,31 @@ export default function App() {
           ? null
           : '模型未加载，先去模型屏点加载';
     const inputLocked = !!busy || gateHint !== null;
+    const generating = busy === '聊天推理';
+    const canSend = draft.trim() !== '' || pendingImages.length > 0;
     return (
     <View style={styles.screen}>
       <ScrollView
         ref={chatScroll}
         style={styles.chatList}
         contentContainerStyle={styles.chatListContent}
+        scrollEventThrottle={16}
+        onScroll={e => {
+          const {contentOffset, contentSize, layoutMeasurement} = e.nativeEvent;
+          const distance = contentSize.height - (contentOffset.y + layoutMeasurement.height);
+          followOutput.current = distance < 24;
+        }}
         onContentSizeChange={() => {
+          if (!followOutput.current) return;
           const last = messages[messages.length - 1];
           const sig = `${messages.length}:${last?.role ?? ''}:${last?.text.length ?? 0}:${typing ? 1 : 0}`;
           if (sig === chatScrollSig.current) return;
           chatScrollSig.current = sig;
           chatScroll.current?.scrollToEnd({animated: true});
         }}>
-        {messages.map((m, i) => (
+        {messages.map((m, i) => {
+          const uris = msgImageUris(m);
+          return (
           <React.Fragment key={i}>
             {m.text !== '' ? (
               <View
@@ -654,14 +728,19 @@ export default function App() {
                 </Text>
               </View>
             ) : null}
-            {m.imageUri ? (
-              <TouchableOpacity onPress={() => setViewerUri(m.imageUri ?? null)}>
-                <Image source={{uri: m.imageUri}} style={styles.thumb} resizeMode="cover" />
-              </TouchableOpacity>
+            {uris.length > 0 ? (
+              <View style={styles.sentStrip}>
+                {uris.map((uri, idx) => (
+                  <TouchableOpacity key={uri + '#' + idx} onPress={() => setViewerData({uris, index: idx})}>
+                    <Image source={{uri}} style={styles.thumbSmall} resizeMode="cover" />
+                  </TouchableOpacity>
+                ))}
+              </View>
             ) : null}
             {m.role === 'ai' && !m.live && m.stats ? <StatsStrip stats={m.stats} /> : null}
           </React.Fragment>
-        ))}
+          );
+        })}
         {typing ? (
           <View style={[styles.bubble, styles.bubbleAi]}>
             <ActivityIndicator />
@@ -669,14 +748,20 @@ export default function App() {
           </View>
         ) : null}
       </ScrollView>
-      {pendingImage !== null ? (
-        <View style={styles.pendingBar}>
-          <Text style={styles.pendingText} numberOfLines={1}>
-            已选图片：{pendingImage}
-          </Text>
-          <TouchableOpacity onPress={() => setPendingImage(null)} style={styles.pendingRemove}>
-            <Text>移除</Text>
-          </TouchableOpacity>
+      {pendingImages.length > 0 ? (
+        <View style={styles.pendingStrip}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.pendingStripContent}>
+            {pendingImages.map((uri, idx) => (
+              <View key={uri + '#' + idx} style={styles.pendingThumbWrap}>
+                <TouchableOpacity onPress={() => setViewerData({uris: pendingImages, index: idx})}>
+                  <Image source={{uri}} style={styles.pendingThumb} resizeMode="cover" />
+                </TouchableOpacity>
+                <TouchableOpacity onPress={() => removePendingImage(uri)} style={styles.pendingThumbX} hitSlop={8}>
+                  <Text style={styles.pendingThumbXText}>×</Text>
+                </TouchableOpacity>
+              </View>
+            ))}
+          </ScrollView>
         </View>
       ) : null}
       {gateHint !== null ? (
@@ -698,10 +783,10 @@ export default function App() {
           editable={!inputLocked}
         />
         <TouchableOpacity
-          style={[styles.sendBtn, ((!draft.trim() && !pendingImage) || inputLocked) && styles.sendBtnDisabled]}
-          onPress={sendChat}
-          disabled={(!draft.trim() && !pendingImage) || inputLocked}>
-          <Text style={styles.sendText}>发送</Text>
+          style={[styles.sendBtn, generating ? styles.sendBtnStop : (!canSend || inputLocked) && styles.sendBtnDisabled]}
+          onPress={generating ? stopChat : sendChat}
+          disabled={generating ? false : !canSend || inputLocked}>
+          {generating ? <View style={styles.stopIcon} /> : <Text style={styles.sendText}>发送</Text>}
         </TouchableOpacity>
       </View>
     </View>
@@ -1004,11 +1089,11 @@ export default function App() {
       </Modal>
 
       <ImageView
-        images={viewerUri ? [{uri: viewerUri}] : []}
-        imageIndex={0}
-        visible={viewerUri !== null}
-        onRequestClose={() => setViewerUri(null)}
-        onLongPress={image => confirmSaveImage(String((image as any)?.uri ?? viewerUri ?? ''))}
+        images={(viewerData?.uris ?? []).map(uri => ({uri}))}
+        imageIndex={viewerData?.index ?? 0}
+        visible={viewerData !== null}
+        onRequestClose={() => setViewerData(null)}
+        onLongPress={image => confirmSaveImage(String((image as any)?.uri ?? viewerData?.uris?.[viewerData?.index ?? 0] ?? ''))}
       />
 
       <Modal
@@ -1024,7 +1109,7 @@ export default function App() {
           }}>
           <Pressable style={styles.settingsCard} onPress={e => e.stopPropagation()}>
             <Text style={styles.settingsTitle}>图片设置</Text>
-            <Text style={styles.hint}>总分辨率预算（万像素，默认100，超出等比压缩，仅测试端）</Text>
+            <Text style={styles.hint}>总分辨率预算（万像素，默认10，超出等比压缩，仅测试端）</Text>
             <TextInput
               value={budgetWan}
               onChangeText={setBudgetWan}
@@ -1054,10 +1139,7 @@ export default function App() {
           <Pressable style={styles.menu} onPress={e => e.stopPropagation()}>
             <TouchableOpacity
               style={styles.menuItem}
-              onPress={() => {
-                setMessages([]);
-                setChatMenuOpen(false);
-              }}>
+              onPress={clearChat}>
               <Text>清空聊天记录</Text>
             </TouchableOpacity>
           </Pressable>
@@ -1194,10 +1276,33 @@ const styles = StyleSheet.create({
   bubbleError: {backgroundColor: '#fdecea', alignSelf: 'flex-start', borderWidth: 1, borderColor: '#b00020'},
   bubbleAiText: {color: '#111111'},
   bubbleUserText: {color: '#ffffff'},
-  thumb: {width: 120, height: 120, borderRadius: 10, marginBottom: 8, alignSelf: 'flex-end'},
+  sentStrip: {flexDirection: 'row', flexWrap: 'wrap', marginBottom: 8, alignSelf: 'flex-end', justifyContent: 'flex-end'},
+  thumbSmall: {width: 72, height: 72, borderRadius: 10, marginLeft: 6, marginBottom: 6},
   statsBox: {backgroundColor: '#f4f4f4', borderRadius: 8, padding: 8, marginBottom: 8, alignSelf: 'flex-start', maxWidth: '85%'},
   statsText: {fontFamily: 'monospace', fontSize: 12, color: '#555555'},
   inputBar: {flexDirection: 'row', padding: 10, paddingLeft: 2, borderTopWidth: 1, borderTopColor: '#e5e5e5', alignItems: 'flex-end'},
+  pendingStrip: {
+    borderTopWidth: 1,
+    borderTopColor: '#e5e5e5',
+    backgroundColor: '#f7f7f7',
+    paddingVertical: 8,
+  },
+  pendingStripContent: {paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center'},
+  pendingThumbWrap: {marginRight: 8, position: 'relative'},
+  pendingThumb: {width: 56, height: 56, borderRadius: 8},
+  pendingThumbX: {
+    position: 'absolute',
+    top: -8,
+    right: -8,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: '#111111',
+    opacity: 0.8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  pendingThumbXText: {color: '#ffffff', fontSize: 14, lineHeight: 16, fontWeight: '700'},
   pendingBar: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1208,7 +1313,6 @@ const styles = StyleSheet.create({
     backgroundColor: '#f7f7f7',
   },
   pendingText: {flex: 1, fontSize: 12, color: '#333333'},
-  pendingRemove: {paddingHorizontal: 8, paddingVertical: 4},
   input: {
     flex: 1,
     borderWidth: 1,
@@ -1222,8 +1326,10 @@ const styles = StyleSheet.create({
     textAlignVertical: 'center',
     includeFontPadding: false,
   },
-  sendBtn: {marginLeft: 8, backgroundColor: '#2563eb', borderRadius: 18, paddingHorizontal: 16, paddingVertical: 10},
+  sendBtn: {marginLeft: 8, backgroundColor: '#2563eb', borderRadius: 18, paddingHorizontal: 16, paddingVertical: 10, minWidth: 64, minHeight: 40, alignItems: 'center', justifyContent: 'center'},
   sendBtnDisabled: {opacity: 0.4},
+  sendBtnStop: {backgroundColor: '#dc2626', opacity: 1},
+  stopIcon: {width: 14, height: 14, borderRadius: 2, backgroundColor: '#ffffff'},
   sendText: {color: '#ffffff', fontWeight: '600'},
   logList: {flex: 1},
   logText: {fontSize: 13, marginBottom: 4},

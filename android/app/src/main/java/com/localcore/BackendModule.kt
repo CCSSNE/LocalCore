@@ -160,15 +160,34 @@ class BackendModule(private val reactContext: ReactApplicationContext) :
   }
 
   @ReactMethod
+  fun stopChat(promise: Promise) {
+    // 推理占着单线程 executor，直调 cancel 才能即时中断；经 runAsync 会排队到推理结束后，无意义。
+    try {
+      application.graph.runtime.cancel()
+      promise.resolve(null)
+    } catch (error: Exception) {
+      promise.reject("STOP_CHAT_FAILED", error.message, error)
+    }
+  }
+
+  @ReactMethod
   fun prepareChatImage(uriString: String, maxImagePixels: Int?, promise: Promise) {
     runAsync(promise, "PREPARE_IMAGE_FAILED") {
       val source = Uri.parse(uriString) ?: throw IllegalArgumentException("图片地址无效")
       val directory = storedImageDir()
       val raw = copyUriToFile(source, directory, "chat-stored-")
-      if (maxImagePixels == null || maxImagePixels <= 0) return@runAsync raw.toURI().toString()
-      val prepared = downscaleIfNeeded(raw, maxImagePixels)
-      if (prepared.note != null) emitStage(prepared.note)
-      prepared.file.toURI().toString()
+      try {
+        if (maxImagePixels == null || maxImagePixels <= 0) return@runAsync raw.toURI().toString()
+        val prepared = downscaleIfNeeded(raw, maxImagePixels)
+        if (prepared.note != null) emitStage(prepared.note)
+        prepared.file.toURI().toString()
+      } catch (error: Exception) {
+        try {
+          if (raw.isFile) raw.delete()
+        } catch (_: Exception) {
+        }
+        throw error
+      }
     }
   }
 
@@ -310,10 +329,11 @@ class BackendModule(private val reactContext: ReactApplicationContext) :
     val options = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
     val decoded = android.graphics.BitmapFactory.decodeFile(file.absolutePath, options)
         ?: return CachedImage(file, null)
+    var output: java.io.File? = null
     try {
       val scaled = if (decoded.width == targetWidth && decoded.height == targetHeight) decoded
       else android.graphics.Bitmap.createScaledBitmap(decoded, targetWidth, targetHeight, true)
-      val output = java.io.File.createTempFile("chat-img-scaled-", ".jpg", file.parentFile)
+      output = java.io.File.createTempFile("chat-img-scaled-", ".jpg", file.parentFile)
       java.io.FileOutputStream(output).use { stream ->
         if (!scaled.compress(android.graphics.Bitmap.CompressFormat.JPEG, 92, stream)) {
           throw IllegalStateException("图片压缩失败")
@@ -325,7 +345,15 @@ class BackendModule(private val reactContext: ReactApplicationContext) :
       file.delete()
       return CachedImage(output, "图片" + width + "x" + height + "压缩到" + targetWidth + "x" + targetHeight)
     } catch (error: Exception) {
-      decoded.recycle()
+      try {
+        decoded.recycle()
+      } catch (_: Exception) {
+      }
+      try {
+        val pending = output
+        if (pending != null && pending.isFile) pending.delete()
+      } catch (_: Exception) {
+      }
       throw error
     }
   }
