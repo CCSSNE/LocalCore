@@ -14,7 +14,6 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import {KeyboardAvoidingView, KeyboardProvider} from 'react-native-keyboard-controller';
 import ImageView from 'react-native-image-viewing';
 
 const {Backend} = NativeModules;
@@ -423,7 +422,6 @@ export default function App() {
       lastMsg.text === '';
     return (
     <View style={styles.screen}>
-      <KeyboardAvoidingView behavior="padding" style={styles.chatAvoid}>
       <ScrollView
         ref={chatScroll}
         style={styles.chatList}
@@ -486,7 +484,6 @@ export default function App() {
           <Text style={styles.sendText}>发送</Text>
         </TouchableOpacity>
       </View>
-      </KeyboardAvoidingView>
     </View>
     );
   };
@@ -703,7 +700,6 @@ export default function App() {
   };
 
   return (
-    <KeyboardProvider>
     <View style={styles.root}>
       <View style={styles.header}>
         <TouchableOpacity onPress={() => setDrawerOpen(true)} style={styles.iconBtn}>
@@ -765,7 +761,6 @@ export default function App() {
         </Pressable>
       ) : null}
     </View>
-    </KeyboardProvider>
   );
 }
 
@@ -863,7 +858,6 @@ const styles = StyleSheet.create({
     borderColor: '#666666',
   },
   rowBtns: {flexDirection: 'row'},
-  chatAvoid: {flex: 1},
   chatList: {flex: 1},
   chatListContent: {padding: 16},
   bubble: {padding: 10, borderRadius: 10, marginBottom: 8, maxWidth: '85%', alignSelf: 'flex-start'},
