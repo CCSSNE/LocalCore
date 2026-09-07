@@ -944,16 +944,30 @@ export default function App() {
             </Text>
           ) : null}
           <View style={styles.rowBtns}>
-            <TouchableOpacity
-              style={styles.btn}
-              disabled={!!busy}
-              onPress={() =>
-                run('加载模型', () => Backend.loadModel(model.id), () => {
-                  fetchModels();
-                })
-              }>
-              <Text>加载</Text>
-            </TouchableOpacity>
+            {loadedId === model.id &&
+            (runtimePhase === 'model_ready' || runtimePhase === 'generating') ? (
+              <TouchableOpacity
+                style={styles.btn}
+                disabled={!!busy}
+                onPress={() =>
+                  run('卸载模型', () => Backend.unloadModel(), () => {
+                    fetchModels();
+                  })
+                }>
+                <Text>卸载</Text>
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity
+                style={styles.btn}
+                disabled={!!busy}
+                onPress={() =>
+                  run('加载模型', () => Backend.loadModel(model.id), () => {
+                    fetchModels();
+                  })
+                }>
+                <Text>加载</Text>
+              </TouchableOpacity>
+            )}
             <TouchableOpacity
               style={styles.btn}
               disabled={!!busy}
