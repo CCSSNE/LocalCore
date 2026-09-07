@@ -4,6 +4,7 @@ import {
   Alert,
   Image,
   Modal,
+  NativeEventEmitter,
   NativeModules,
   Pressable,
   ScrollView,
@@ -16,6 +17,7 @@ import {
 import {KeyboardAvoidingView, KeyboardProvider} from 'react-native-keyboard-controller';
 
 const {Backend} = NativeModules;
+const chatEvents = new NativeEventEmitter(NativeModules.Backend);
 
 type RouteKey = 'chat' | 'core' | 'model' | 'backend' | 'log';
 
@@ -38,7 +40,55 @@ const TITLES: Record<RouteKey, string> = {
 };
 
 type LogLine = {kind: 'info' | 'ok' | 'fail'; text: string};
-type ChatMsg = {role: 'user' | 'ai' | 'error'; text: string; imageUri?: string | null};
+type ChatMsg = {role: 'user' | 'ai' | 'error'; text: string; imageUri?: string | null; live?: boolean; stats?: TurnStats};
+type TurnStats = {inT: number; cached: number; out: number; ttft: number; llm: number; ctx: number};
+
+// 单轮统计算式照搬 legadoC AiUsageFormat：千分位 + t，时长 ms/s/m，速度 t/s，单耗 ms/t。
+function fmtCount(n: number): string {
+  return Math.max(0, Math.round(n)).toLocaleString('en-US') + 't';
+}
+
+function fmtDur(ms: number): string {
+  if (!(ms >= 0)) return '--';
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  const s = ms / 1000;
+  if (s < 60) return `${s.toFixed(1)}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m${Math.round(s % 60)}s`;
+  return `${Math.floor(m / 60)}h${m % 60}m`;
+}
+
+function fmtSpeed(tok: number, ms: number): string {
+  if (!(ms > 0)) return '--';
+  const tps = (tok * 1000) / ms;
+  if (tps >= 10) return `${Math.round(tps).toLocaleString('en-US')}t/s`;
+  return `${tps.toFixed(1)}t/s`;
+}
+
+function fmtMsPerTok(ms: number, tok: number): string {
+  if (!(ms > 0) || !(tok > 0)) return '--';
+  return `${(ms / tok).toFixed(1)}ms/t`;
+}
+
+function StatsStrip({stats}: {stats: TurnStats}) {
+  const [open, setOpen] = useState(false);
+  const lines = [
+    `total-${fmtCount(stats.inT + stats.out)} ${fmtSpeed(stats.out, stats.llm)} ${fmtDur(stats.ttft)}`,
+    `in-${fmtCount(stats.inT)} c-${fmtCount(stats.cached)} ${fmtSpeed(stats.inT, stats.ttft)} ${fmtMsPerTok(stats.ttft, stats.inT)} ${fmtDur(stats.ttft)}`,
+    `ctx-${fmtCount(stats.ctx)}`,
+    `out-${fmtCount(stats.out)} ${fmtSpeed(stats.out, stats.llm)} ${fmtMsPerTok(stats.llm, stats.out)} ${fmtDur(stats.llm)}`,
+    `total-${fmtCount(stats.inT + stats.out)}`,
+  ];
+  return (
+    <TouchableOpacity onPress={() => setOpen(v => !v)} style={styles.statsBox}>
+      <Text style={styles.statsText}>
+        {lines[0]}
+        {open ? ' ▲' : ' ▼'}
+      </Text>
+      {open ? <Text style={styles.statsText}>{lines.slice(1).join('\n')}</Text> : null}
+    </TouchableOpacity>
+  );
+}
 type ModelEntry = {id: string; name: string; paired: boolean};
 
 function pickAnd(pickLabel: string, after: (uri: string) => Promise<any>) {
@@ -204,6 +254,22 @@ export default function App() {
   };
 
   useEffect(() => {
+    const sub = chatEvents.addListener('LocalCoreChatToken', (token: any) => {
+      const piece = String(token ?? '');
+      if (!piece) return;
+      setMessages(prev => {
+        if (prev.length === 0) return prev;
+        const last = prev[prev.length - 1];
+        if (last.role !== 'ai' || !last.live) return prev;
+        const next = [...prev];
+        next[next.length - 1] = {...last, text: last.text + piece};
+        return next;
+      });
+    });
+    return () => sub.remove();
+  }, []);
+
+  useEffect(() => {
     if (route === 'model') {
       fetchModels();
     }
@@ -256,22 +322,45 @@ export default function App() {
     const image = pendingImage;
     setDraft('');
     setMessages(prev => [...prev, {role: 'user', text: prompt, imageUri: image}]);
+    setMessages(prev => [...prev, {role: 'ai', text: '', live: true}]);
     const label = '聊天推理';
     setBusy(label);
     push('info', '>> ' + label + '：' + prompt + (image ? ' [图片]' : ''));
     (async () => {
       const id = await firstModelId();
-      if (image) return Backend.testChatWithImage(id, prompt, image);
-      return Backend.testChat(id, prompt);
+      const raw = String(await Backend.chatStream(id, prompt, image ?? null));
+      return JSON.parse(raw);
     })()
-      .then((value: any) => {
-        const text = String(value ?? '');
-        setMessages(prev => [...prev, {role: 'ai', text}]);
+      .then((result: any) => {
+        const text = String(result?.text ?? '');
+        const stats: TurnStats = {
+          inT: Number(result?.promptTokens ?? 0),
+          cached: 0,
+          out: Number(result?.completionTokens ?? 0),
+          ttft: Number(result?.ttftMs ?? 0),
+          llm: Number(result?.llmMs ?? 0),
+          ctx: Number(result?.promptTokens ?? 0),
+        };
+        setMessages(prev => {
+          if (prev.length === 0) return [...prev, {role: 'ai', text, stats}];
+          const last = prev[prev.length - 1];
+          if (last.role !== 'ai' || !last.live) return [...prev, {role: 'ai', text, stats}];
+          const next = [...prev];
+          next[next.length - 1] = {role: 'ai', text, stats};
+          return next;
+        });
         if (image) setPendingImage(null);
         push('ok', 'OK ' + label + ' => ' + text);
       })
       .catch((error: Error) => {
-        setMessages(prev => [...prev, {role: 'error', text: error.message}]);
+        setMessages(prev => {
+          if (prev.length === 0) return [...prev, {role: 'error', text: error.message}];
+          const last = prev[prev.length - 1];
+          if (last.role !== 'ai' || !last.live) return [...prev, {role: 'error', text: error.message}];
+          const next = [...prev];
+          next[next.length - 1] = {role: 'error', text: error.message};
+          return next;
+        });
         push('fail', 'FAIL ' + label + ' => ' + error.message);
       })
       .finally(() => setBusy(null));
@@ -314,7 +403,15 @@ export default function App() {
     );
   };
 
-  const renderChat = () => (
+  const renderChat = () => {
+    const lastMsg = messages.length > 0 ? messages[messages.length - 1] : null;
+    const typing =
+      busy === '聊天推理' &&
+      lastMsg !== null &&
+      lastMsg.role === 'ai' &&
+      !!lastMsg.live &&
+      lastMsg.text === '';
+    return (
     <View style={styles.screen}>
       <KeyboardAvoidingView behavior="padding" style={styles.chatAvoid}>
       <ScrollView
@@ -338,9 +435,10 @@ export default function App() {
             {m.imageUri ? (
               <Image source={{uri: m.imageUri}} style={styles.thumb} resizeMode="cover" />
             ) : null}
+            {m.role === 'ai' && !m.live && m.stats ? <StatsStrip stats={m.stats} /> : null}
           </React.Fragment>
         ))}
-        {busy === '聊天推理' ? (
+        {typing ? (
           <View style={[styles.bubble, styles.bubbleAi]}>
             <ActivityIndicator />
             <Text style={styles.bubbleAiText}>正在推理…</Text>
@@ -378,7 +476,8 @@ export default function App() {
       </View>
       </KeyboardAvoidingView>
     </View>
-  );
+    );
+  };
 
   const renderCore = () => (
     <View style={styles.screen}>
@@ -754,6 +853,8 @@ const styles = StyleSheet.create({
   bubbleAiText: {color: '#111111'},
   bubbleUserText: {color: '#ffffff'},
   thumb: {width: 120, height: 120, borderRadius: 10, marginBottom: 8, alignSelf: 'flex-end'},
+  statsBox: {backgroundColor: '#f4f4f4', borderRadius: 8, padding: 8, marginBottom: 8, alignSelf: 'flex-start', maxWidth: '85%'},
+  statsText: {fontFamily: 'monospace', fontSize: 12, color: '#555555'},
   inputBar: {flexDirection: 'row', padding: 10, paddingLeft: 2, borderTopWidth: 1, borderTopColor: '#e5e5e5', alignItems: 'flex-end'},
   pendingBar: {
     flexDirection: 'row',
