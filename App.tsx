@@ -170,6 +170,10 @@ export default function App() {
   const [budgetPx, setBudgetPx] = useState(DEFAULT_BUDGET_PX);
   const [budgetWan, setBudgetWan] = useState('10');
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [tplOpen, setTplOpen] = useState(false);
+  const [tplModel, setTplModel] = useState<ModelEntry | null>(null);
+  const [tplText, setTplText] = useState('');
+  const [tplLoading, setTplLoading] = useState(false);
   const [coreRt, setCoreRt] = useState<{cuPhase: string | null; cuError: string | null}>({
     cuPhase: null,
     cuError: null,
@@ -241,14 +245,27 @@ export default function App() {
     }
   };
 
+  const applyBudgetPx = (px: number) => {
+    setBudgetPx(px);
+    Backend.setImageBudget(px).catch((e: any) =>
+      push('fail', 'FAIL 设置图片预算 => ' + (e?.message ?? String(e))),
+    );
+  };
+
   const loadSettings = () => {
     AsyncStorage.getItem(SETTINGS_KEY)
       .then(raw => {
-        if (raw == null) return;
+        if (raw == null) {
+          applyBudgetPx(DEFAULT_BUDGET_PX);
+          return;
+        }
         const px = Number(JSON.parse(raw)?.imageBudgetPx);
         if (px > 0) {
-          setBudgetPx(Math.round(px));
-          setBudgetWan(String(Math.round(px / 10000)));
+          const rounded = Math.round(px);
+          setBudgetWan(String(Math.round(rounded / 10000)));
+          applyBudgetPx(rounded);
+        } else {
+          applyBudgetPx(DEFAULT_BUDGET_PX);
         }
       })
       .catch((e: any) => push('fail', 'FAIL 读取图片设置 => ' + (e?.message ?? String(e))));
@@ -261,8 +278,8 @@ export default function App() {
       return;
     }
     const px = Math.round(wan * 10000);
-    setBudgetPx(px);
     setSettingsOpen(false);
+    applyBudgetPx(px);
     AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify({imageBudgetPx: px})).catch((e: any) =>
       push('fail', 'FAIL 保存图片设置 => ' + (e?.message ?? String(e))),
     );
@@ -657,6 +674,30 @@ export default function App() {
     ]);
   };
 
+  const openTemplate = (model: ModelEntry) => {
+    setTplModel(model);
+    setTplText('');
+    setTplLoading(true);
+    setTplOpen(true);
+    Backend.getModelTemplate(model.id)
+      .then((text: any) => {
+        setTplText(String(text ?? ''));
+        setTplLoading(false);
+      })
+      .catch((e: any) => {
+        setTplLoading(false);
+        push('fail', 'FAIL 读取模板 => ' + (e?.message ?? String(e)));
+      });
+  };
+
+  const saveTemplate = () => {
+    if (!tplModel) return;
+    const id = tplModel.id;
+    run('保存模板', () => Backend.setModelTemplate(id, tplText), () => {
+      setTplOpen(false);
+    });
+  };
+
   const confirmDelete = (model: ModelEntry) => {
     Alert.alert(
       '删除模型',
@@ -928,10 +969,16 @@ export default function App() {
               <Text>配对</Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={[styles.btn, styles.btnLast]}
+              style={styles.btn}
               disabled={!!busy}
               onPress={() => confirmDelete(model)}>
               <Text>删除</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.btn, styles.btnLast]}
+              disabled={!!busy}
+              onPress={() => openTemplate(model)}>
+              <Text>模板</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -1097,6 +1144,40 @@ export default function App() {
       />
 
       <Modal
+        visible={tplOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setTplOpen(false)}>
+        <Pressable style={styles.tplMask} onPress={() => setTplOpen(false)}>
+          <Pressable style={styles.tplCard} onPress={e => e.stopPropagation()}>
+            <Text style={styles.settingsTitle}>模板{tplModel ? ' - ' + tplModel.name : ''}</Text>
+            {tplLoading ? (
+              <View style={styles.centerBox}>
+                <ActivityIndicator />
+                <Text style={styles.hint}>正在读取模板…</Text>
+              </View>
+            ) : (
+              <TextInput
+                value={tplText}
+                onChangeText={setTplText}
+                multiline
+                placeholderTextColor="#999999"
+                style={styles.tplInput}
+              />
+            )}
+            <View style={styles.rowBtns}>
+              <TouchableOpacity
+                style={[styles.btn, styles.btnFlex, styles.btnLast]}
+                disabled={tplLoading || !!busy}
+                onPress={saveTemplate}>
+                <Text>保存</Text>
+              </TouchableOpacity>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      <Modal
         visible={settingsOpen}
         transparent
         animationType="fade"
@@ -1109,7 +1190,7 @@ export default function App() {
           }}>
           <Pressable style={styles.settingsCard} onPress={e => e.stopPropagation()}>
             <Text style={styles.settingsTitle}>图片设置</Text>
-            <Text style={styles.hint}>总分辨率预算（万像素，默认10，超出等比压缩，仅测试端）</Text>
+            <Text style={styles.hint}>总分辨率预算（万像素，默认10，超出等比压缩，测试端与后端接口都生效）</Text>
             <TextInput
               value={budgetWan}
               onChangeText={setBudgetWan}
@@ -1210,6 +1291,21 @@ const styles = StyleSheet.create({
     marginVertical: 10,
     color: '#111111',
     textAlignVertical: 'center',
+    includeFontPadding: false,
+  },
+  tplMask: {flex: 1, backgroundColor: 'rgba(0,0,0,0.3)', alignItems: 'center', justifyContent: 'center'},
+  tplCard: {width: '86%', maxHeight: '80%', backgroundColor: '#ffffff', borderRadius: 12, padding: 16},
+  tplInput: {
+    borderWidth: 1,
+    borderColor: '#dddddd',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    minHeight: 200,
+    marginVertical: 10,
+    color: '#111111',
+    fontFamily: 'monospace',
+    textAlignVertical: 'top',
     includeFontPadding: false,
   },
   screen: {flex: 1, backgroundColor: '#ffffff'},
