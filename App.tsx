@@ -15,6 +15,7 @@ import {
   View,
 } from 'react-native';
 import {KeyboardAvoidingView, KeyboardProvider} from 'react-native-keyboard-controller';
+import ImageView from 'react-native-image-viewing';
 
 const {Backend} = NativeModules;
 const chatEvents = new NativeEventEmitter(NativeModules.Backend);
@@ -148,6 +149,7 @@ export default function App() {
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [draft, setDraft] = useState('');
   const [pendingImage, setPendingImage] = useState<string | null>(null);
+  const [viewerUri, setViewerUri] = useState<string | null>(null);
   const [modelList, setModelList] = useState<ModelEntry[] | null>(null);
   const [modelError, setModelError] = useState<string | null>(null);
   const [listLoading, setListLoading] = useState(false);
@@ -385,6 +387,14 @@ export default function App() {
     run('导出日志', () => Backend.exportLog(fileName, logText()));
   };
 
+  const confirmSaveImage = (uri: string) => {
+    if (!uri) return;
+    Alert.alert('保存图片', '保存到相册 Pictures/LocalCore？', [
+      {text: '取消', style: 'cancel'},
+      {text: '保存', onPress: () => run('保存图片', () => Backend.saveImage(uri))},
+    ]);
+  };
+
   const confirmDelete = (model: ModelEntry) => {
     Alert.alert(
       '删除模型',
@@ -433,7 +443,9 @@ export default function App() {
               </View>
             ) : null}
             {m.imageUri ? (
-              <Image source={{uri: m.imageUri}} style={styles.thumb} resizeMode="cover" />
+              <TouchableOpacity onPress={() => setViewerUri(m.imageUri ?? null)}>
+                <Image source={{uri: m.imageUri}} style={styles.thumb} resizeMode="cover" />
+              </TouchableOpacity>
             ) : null}
             {m.role === 'ai' && !m.live && m.stats ? <StatsStrip stats={m.stats} /> : null}
           </React.Fragment>
@@ -729,6 +741,14 @@ export default function App() {
           </Pressable>
         </Pressable>
       </Modal>
+
+      <ImageView
+        images={viewerUri ? [{uri: viewerUri}] : []}
+        imageIndex={0}
+        visible={viewerUri !== null}
+        onRequestClose={() => setViewerUri(null)}
+        onLongPress={image => confirmSaveImage(String((image as any)?.uri ?? viewerUri ?? ''))}
+      />
 
       {chatMenuOpen ? (
         <Pressable style={styles.menuLayer} onPress={() => setChatMenuOpen(false)}>
