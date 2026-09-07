@@ -9,6 +9,7 @@ import com.localcore.config.ConfigRepository;
 import com.localcore.diagnostics.EventLog;
 import com.localcore.io.GgufMeta;
 import com.localcore.resource.ResourceManager;
+import com.localcore.resource.ResourceState;
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -21,6 +22,9 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.zip.ZipEntry;
@@ -51,17 +55,93 @@ public final class LocalExchange {
         }
         JSONObject next = config.current();
         upsertResource(next, descriptor);
-        long ggufContext = -1;
+        long ggufContext;
         try {
             ggufContext = GgufMeta.contextLength(resources.installedFile(resourceId));
         } catch (Exception error) {
-            events.error("resource", "读取模型上下文长度失败，回退 4096", error);
+            throw new IllegalStateException("读取模型上下文长度失败，拒绝导入: " + error.getMessage(), error);
         }
-        long contextSize = ggufContext > 0 ? ggufContext : 4096;
-        next.getJSONArray("models").put(modelEntry(base, modelId, resourceId, currentCoreId(), contextSize));
+        if (ggufContext <= 0) {
+            throw new IllegalStateException("模型未声明上下文长度(llama.context_length 缺失)，拒绝导入: " + name);
+        }
+        next.getJSONArray("models").put(modelEntry(base, modelId, resourceId, currentCoreId(), ggufContext));
         config.activate(next.toString());
-        events.info("resource", "本地模型已导入并注册 " + modelId + " 上下文 " + contextSize);
+        events.info("resource", "本地模型已导入并注册 " + modelId + " 上下文 " + ggufContext);
         return modelId;
+    }
+
+    public String downloadHfModel(String requestText) throws Exception {
+        JSONObject request = new JSONObject(requestText);
+        String repoId = requiredText(request, "repoId");
+        String revision = requiredText(request, "revision");
+        String fileName = requiredText(request, "fileName");
+        String sourceId = request.optString("sourceId", activeModelDownloadSource());
+        String resourceId = stableHfId("hf.model", repoId + "\n" + fileName);
+        String modelId = stableHfId("hf", repoId + "\n" + fileName);
+        JSONObject descriptor = hfDescriptor(request, resourceId, sourceId, repoId, revision, fileName);
+
+        JSONObject next = config.current();
+        upsertResource(next, descriptor);
+        JSONObject model = findModelById(next, modelId);
+        if (model == null) {
+            String name = request.optString("modelName", stripSuffix(fileName, ".gguf"));
+            long catalogContext = request.optLong("contextSize", 0);
+            model = modelEntry(name, modelId, resourceId, currentCoreId(), catalogContext);
+            next.getJSONArray("models").put(model);
+        } else {
+            model.put("resource", resourceId);
+            model.put("core", currentCoreId());
+        }
+        JSONObject source = new JSONObject();
+        source.put("kind", "huggingface");
+        source.put("sourceId", sourceId);
+        source.put("repo", repoId);
+        source.put("revision", revision);
+        source.put("fileName", fileName);
+        source.put("contextPending", true);
+        model.put("source", source);
+        config.activate(next.toString());
+
+        ResourceState state = resources.knownState(resourceId);
+        if (state != null && state.usable() && revision.equals(state.version)) {
+            finalizeHfModelContext(modelId, revision, resources.installedFile(resourceId));
+        } else {
+            resources.install(resourceId, file -> finalizeHfModelContext(modelId, revision, file));
+        }
+        events.info("resource", "HF 模型下载已登记 " + repoId + "/" + fileName + " -> " + modelId);
+        return downloadResult(modelId, resourceId);
+    }
+
+    public String downloadHfProjection(String requestText, String modelId) throws Exception {
+        JSONObject request = new JSONObject(requestText);
+        String repoId = requiredText(request, "repoId");
+        String revision = requiredText(request, "revision");
+        String fileName = requiredText(request, "fileName");
+        String sourceId = request.optString("sourceId", activeModelDownloadSource());
+        String resourceId = stableHfId("hf.mmproj", repoId + "\n" + fileName);
+        JSONObject descriptor = hfDescriptor(request, resourceId, sourceId, repoId, revision, fileName);
+
+        JSONObject next = config.current();
+        JSONObject model = modelById(next, modelId);
+        upsertResource(next, descriptor);
+        model.put("mmproj", resourceId);
+        JSONArray capabilities = model.getJSONArray("capabilities");
+        if (!contains(capabilities, "vision")) capabilities.put("vision");
+        config.activate(next.toString());
+
+        ResourceState state = resources.knownState(resourceId);
+        if (state == null || !state.usable() || !revision.equals(state.version)) resources.install(resourceId);
+        events.info("resource", "HF 投影下载已登记 " + repoId + "/" + fileName + " -> " + modelId);
+        return downloadResult(modelId, resourceId);
+    }
+
+    public void setModelDownloadSource(String sourceId) throws Exception {
+        JSONObject next = config.current();
+        JSONObject downloads = next.getJSONObject("modelDownloads");
+        findDownloadSource(downloads, sourceId);
+        downloads.put("activeSource", sourceId);
+        config.activate(next.toString());
+        events.info("resource", "模型下载源已切换为 " + sourceId);
     }
 
     public void importMmproj(Uri uri, String modelId) throws Exception {
@@ -208,6 +288,102 @@ public final class LocalExchange {
         model.put("inference", checkedInference(inference));
         config.activate(next.toString());
         events.info("resource", "模型参数已更新 " + modelId + "，加载项下次加载生效");
+    }
+
+    private void finalizeHfModelContext(String modelId, String revision, File file) throws Exception {
+        long contextSize = GgufMeta.contextLength(file);
+        if (contextSize <= 0) throw new IllegalStateException("GGUF 未提供有效上下文长度: " + file.getName());
+        JSONObject next = config.current();
+        JSONObject model = modelById(next, modelId);
+        JSONObject source = model.getJSONObject("source");
+        if (!revision.equals(source.optString("revision"))) {
+            throw new IllegalStateException("模型下载版本与当前配置不一致: downloaded=" + revision
+                    + ", configured=" + source.optString("revision"));
+        }
+        if (!source.optBoolean("contextPending")) return;
+        model.getJSONObject("load").put("contextSize", contextSize);
+        source.put("contextPending", false);
+        config.activate(next.toString());
+        events.info("resource", "HF 模型上下文已从 GGUF 写入 " + modelId + " => " + contextSize);
+    }
+
+    private JSONObject hfDescriptor(JSONObject request, String resourceId, String sourceId,
+                                    String repoId, String revision, String fileName) throws Exception {
+        JSONObject configuredSource = findDownloadSource(
+                config.current().getJSONObject("modelDownloads"), sourceId);
+        String endpoint = requiredText(configuredSource, "endpoint").replaceAll("/+$", "");
+        JSONObject descriptor = descriptor(resourceId, "model");
+        descriptor.put("version", revision);
+        descriptor.put("url", endpoint + "/" + encodePath(repoId) + "/resolve/"
+                + Uri.encode(revision) + "/" + encodePath(fileName));
+        descriptor.put("size", request.optLong("size", 0));
+        String sha256 = request.optString("sha256", "");
+        if (!sha256.isEmpty()) descriptor.put("sha256", sha256);
+        descriptor.put("fileName", fileName);
+        descriptor.put("origin", "huggingface");
+        descriptor.put("sourceId", sourceId);
+        descriptor.put("repo", repoId);
+        descriptor.put("revision", revision);
+        return descriptor;
+    }
+
+    private String activeModelDownloadSource() throws JSONException {
+        return config.current().getJSONObject("modelDownloads").getString("activeSource");
+    }
+
+    private static JSONObject findDownloadSource(JSONObject downloads, String sourceId) {
+        JSONArray sources = downloads.optJSONArray("sources");
+        if (sources == null) throw new IllegalArgumentException("modelDownloads.sources 不存在");
+        for (int i = 0; i < sources.length(); i++) {
+            JSONObject source = sources.optJSONObject(i);
+            if (source != null && sourceId.equals(source.optString("id"))) return source;
+        }
+        throw new IllegalArgumentException("配置中不存在模型下载源: " + sourceId);
+    }
+
+    private static String encodePath(String value) {
+        String[] parts = value.split("/", -1);
+        StringBuilder result = new StringBuilder();
+        for (String part : parts) {
+            if (part.isEmpty()) throw new IllegalArgumentException("路径包含空段: " + value);
+            if (result.length() > 0) result.append('/');
+            result.append(Uri.encode(part));
+        }
+        return result.toString();
+    }
+
+    private static String stableHfId(String prefix, String identity) {
+        final MessageDigest digest;
+        try {
+            digest = MessageDigest.getInstance("SHA-256");
+        } catch (NoSuchAlgorithmException error) {
+            throw new IllegalStateException("系统不支持 SHA-256", error);
+        }
+        byte[] hash = digest.digest(identity.getBytes(StandardCharsets.UTF_8));
+        StringBuilder suffix = new StringBuilder(24);
+        for (int i = 0; i < 12; i++) {
+            suffix.append(Character.forDigit((hash[i] >>> 4) & 0x0f, 16));
+            suffix.append(Character.forDigit(hash[i] & 0x0f, 16));
+        }
+        return prefix + "." + suffix;
+    }
+
+    private static String requiredText(JSONObject source, String key) {
+        String value = source.optString(key, "");
+        if (value.isEmpty()) throw new IllegalArgumentException(key + " 不能为空");
+        return value;
+    }
+
+    private static boolean contains(JSONArray values, String wanted) {
+        for (int i = 0; i < values.length(); i++) if (wanted.equals(values.optString(i))) return true;
+        return false;
+    }
+
+    private static String downloadResult(String modelId, String resourceId) throws JSONException {
+        JSONObject result = new JSONObject();
+        result.put("modelId", modelId);
+        result.put("resourceId", resourceId);
+        return result.toString();
     }
 
     private static JSONObject checkedLoad(JSONObject load) throws JSONException {
@@ -362,12 +538,18 @@ public final class LocalExchange {
     }
 
     private static JSONObject modelById(JSONObject config, String modelId) {
+        JSONObject model = findModelById(config, modelId);
+        if (model != null) return model;
+        throw new IllegalArgumentException("配置中不存在模型: " + modelId);
+    }
+
+    private static JSONObject findModelById(JSONObject config, String modelId) {
         JSONArray models = config.optJSONArray("models");
         for (int i = 0; i < models.length(); i++) {
             JSONObject model = models.optJSONObject(i);
             if (model != null && modelId.equals(model.optString("id"))) return model;
         }
-        throw new IllegalArgumentException("配置中不存在模型: " + modelId);
+        return null;
     }
 
     private String uniqueResourceId(String base) {
