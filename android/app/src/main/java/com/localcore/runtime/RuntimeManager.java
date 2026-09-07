@@ -50,6 +50,7 @@ public final class RuntimeManager {
         this.config = config;
         this.resources = resources;
         this.events = events;
+        this.config.addListener(ignored -> invalidateForConfigActivation());
     }
 
     public synchronized RuntimeState state() {
@@ -132,37 +133,30 @@ public final class RuntimeManager {
             String template = template(model);
             String prompt = NativeBridge.applyChatTemplate(activeHandle,
                     roles.toArray(new String[0]), contents.toArray(new String[0]), template);
-            int promptTokens = NativeBridge.tokenCount(activeHandle, prompt);
-            JSONObject defaults = model.optJSONObject("inference");
-            int maxTokens = request.has("max_tokens") ? request.optInt("max_tokens", -1) : defaults.optInt("maxTokens");
-            double temperature = request.has("temperature") ? request.optDouble("temperature", -1) : defaults.optDouble("temperature");
-            double topP = request.has("top_p") ? request.optDouble("top_p", -1) : defaults.optDouble("topP");
-            int topK = request.has("top_k") ? request.optInt("top_k", -1) : defaults.optInt("topK");
-            long seed = request.has("seed") ? request.optLong("seed", Long.MIN_VALUE) : defaults.optLong("seed");
-            if (maxTokens < 1 || temperature < 0 || topP < 0 || topP > 1 || topK < 0
-                    || seed < -1 || seed > 0xffffffffL) {
-                throw new IllegalArgumentException("请求中的推理参数超出有效范围");
+            return generateLocked(activeHandle, model, prompt, request, consumer);
+        } catch (RuntimeException error) {
+            RuntimeState before = state();
+            setState(new RuntimeState(RuntimeState.Phase.ERROR, before.coreId, before.coreVersion,
+                    before.modelId, error.getMessage()));
+            events.error("runtime", "推理失败", error);
+            throw error;
+        } finally {
+            inference.unlock();
+        }
+    }
+
+    public Result complete(String prompt, JSONObject request, TokenConsumer consumer) {
+        if (prompt == null) throw new IllegalArgumentException("prompt 不能为空");
+        inference.lock();
+        try {
+            final long activeHandle;
+            final JSONObject model;
+            synchronized (this) {
+                if (handle == 0 || loadedModel == null) throw new IllegalStateException("尚未加载模型");
+                activeHandle = handle;
+                model = loadedModel;
             }
-            String[] stops = stops(request.has("stop") ? request.opt("stop") : defaults.optJSONArray("stop"));
-            setState(new RuntimeState(RuntimeState.Phase.GENERATING, state.coreId, state.coreVersion,
-                    model.optString("id"), null));
-            StringBuilder text = new StringBuilder();
-            final IOException[] callbackError = new IOException[1];
-            int generated = NativeBridge.generate(activeHandle, prompt, maxTokens, (float) temperature,
-                    (float) topP, topK, seed, stops, token -> {
-                        String decoded = new String(token, java.nio.charset.StandardCharsets.UTF_8);
-                        text.append(decoded);
-                        try {
-                            return consumer == null || consumer.onToken(decoded);
-                        } catch (IOException error) {
-                            callbackError[0] = error;
-                            return false;
-                        }
-                    });
-            if (callbackError[0] != null) throw new IllegalStateException("流式响应写入失败", callbackError[0]);
-            setState(new RuntimeState(RuntimeState.Phase.MODEL_READY, state.coreId, state.coreVersion,
-                    model.optString("id"), null));
-            return new Result(promptTokens, generated, text.toString());
+            return generateLocked(activeHandle, model, prompt, request, consumer);
         } catch (RuntimeException error) {
             RuntimeState before = state();
             setState(new RuntimeState(RuntimeState.Phase.ERROR, before.coreId, before.coreVersion,
@@ -180,6 +174,42 @@ public final class RuntimeManager {
 
     public void addListener(Listener listener) { listeners.add(listener); }
     public void removeListener(Listener listener) { listeners.remove(listener); }
+
+    private Result generateLocked(long activeHandle, JSONObject model, String prompt,
+                                  JSONObject request, TokenConsumer consumer) {
+        int promptTokens = NativeBridge.tokenCount(activeHandle, prompt);
+        JSONObject defaults = model.optJSONObject("inference");
+        int maxTokens = request.has("max_tokens") ? request.optInt("max_tokens", -1) : defaults.optInt("maxTokens");
+        double temperature = request.has("temperature") ? request.optDouble("temperature", -1) : defaults.optDouble("temperature");
+        double topP = request.has("top_p") ? request.optDouble("top_p", -1) : defaults.optDouble("topP");
+        int topK = request.has("top_k") ? request.optInt("top_k", -1) : defaults.optInt("topK");
+        long seed = request.has("seed") ? request.optLong("seed", Long.MIN_VALUE) : defaults.optLong("seed");
+        if (maxTokens < 1 || temperature < 0 || topP < 0 || topP > 1 || topK < 0
+                || seed < -1 || seed > 0xffffffffL) {
+            throw new IllegalArgumentException("请求中的推理参数超出有效范围");
+        }
+        String[] stops = stops(request.has("stop") ? request.opt("stop") : defaults.optJSONArray("stop"));
+        RuntimeState before = state();
+        setState(new RuntimeState(RuntimeState.Phase.GENERATING, before.coreId, before.coreVersion,
+                model.optString("id"), null));
+        StringBuilder text = new StringBuilder();
+        final IOException[] callbackError = new IOException[1];
+        int generated = NativeBridge.generate(activeHandle, prompt, maxTokens, (float) temperature,
+                (float) topP, topK, seed, stops, token -> {
+                    String decoded = new String(token, java.nio.charset.StandardCharsets.UTF_8);
+                    text.append(decoded);
+                    try {
+                        return consumer == null || consumer.onToken(decoded);
+                    } catch (IOException error) {
+                        callbackError[0] = error;
+                        return false;
+                    }
+                });
+        if (callbackError[0] != null) throw new IllegalStateException("流式响应写入失败", callbackError[0]);
+        setState(new RuntimeState(RuntimeState.Phase.MODEL_READY, before.coreId, before.coreVersion,
+                model.optString("id"), null));
+        return new Result(promptTokens, generated, text.toString());
+    }
 
     private String template(JSONObject model) {
         JSONObject binding = model.optJSONObject("template");
@@ -241,5 +271,20 @@ public final class RuntimeManager {
     private void setState(RuntimeState next) {
         synchronized (this) { state = next; }
         for (Listener listener : listeners) listener.onRuntimeState(next);
+    }
+
+    private void invalidateForConfigActivation() {
+        inference.lock();
+        try {
+            boolean hadRuntime;
+            synchronized (this) {
+                hadRuntime = handle != 0;
+                closeLocked();
+            }
+            setState(RuntimeState.empty());
+            if (hadRuntime) events.info("runtime", "配置已激活，旧模型与核心已卸载");
+        } finally {
+            inference.unlock();
+        }
     }
 }

@@ -10,9 +10,9 @@ import org.json.JSONObject;
 
 import java.io.File;
 import java.io.FileInputStream;
-import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 
@@ -84,9 +84,9 @@ public final class ConfigRepository {
         return Jsons.format(validate(text));
     }
 
-    public synchronized void exportTo(FileOutputStream output) throws IOException {
+    public synchronized void exportTo(OutputStream output) throws IOException {
         output.write(currentText().getBytes(java.nio.charset.StandardCharsets.UTF_8));
-        output.getFD().sync();
+        output.flush();
     }
 
     public void addListener(Listener listener) {
