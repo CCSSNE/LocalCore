@@ -14,10 +14,11 @@ import android.text.InputType;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.AdapterView;
+import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.HorizontalScrollView;
-import android.widget.ArrayAdapter;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.Spinner;
@@ -52,7 +53,10 @@ public final class MainActivity extends Activity {
     private static final int IMPORT_CONFIG = 10;
     private static final int EXPORT_CONFIG = 11;
     private static final int EXPORT_LOG = 12;
-    private static final int IMPORT_MODEL = 13;
+    private static final int IMPORT_GGUF = 13;
+    private static final int IMPORT_CORE = 14;
+    private static final int EXPORT_CORE = 15;
+    private static final int IMPORT_MMPROJ = 16;
     private static final int BACKGROUND = Color.rgb(11, 15, 20);
     private static final int SURFACE = Color.rgb(20, 27, 36);
     private static final int PRIMARY = Color.rgb(101, 214, 173);
@@ -65,14 +69,19 @@ public final class MainActivity extends Activity {
     private TextView backendStatus;
     private TextView runtimeStatus;
     private TextView errorStatus;
+    private TextView coreStatus;
     private LinearLayout resourceList;
     private LinearLayout modelList;
+    private Spinner templateSpinner;
+    private EditText templateEditor;
     private EditText configEditor;
     private TextView logView;
     private TextView updateStatus;
     private LinearLayout managementContainer;
     private final List<FieldBinding> fieldBindings = new ArrayList<>();
-    private String pendingImportResourceId;
+    private String templateModelId;
+    private String pendingPairModelId;
+    private String pendingExportCoreId;
 
     private final ResourceManager.Listener resourceListener = state -> ui(this::renderResources);
     private final RuntimeManager.Listener runtimeListener = state -> ui(this::renderRuntime);
@@ -93,7 +102,7 @@ public final class MainActivity extends Activity {
         graph.backend.addListener(backendListener);
         graph.events.addListener(eventListener);
         graph.updates.addListener(updateListener);
-        if (state != null) pendingImportResourceId = state.getString("pendingImportResourceId");
+        if (state != null) templateModelId = state.getString("templateModelId");
         if (android.os.Build.VERSION.SDK_INT >= 33
                 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 20);
@@ -122,7 +131,7 @@ public final class MainActivity extends Activity {
     @Override
     protected void onSaveInstanceState(Bundle state) {
         super.onSaveInstanceState(state);
-        state.putString("pendingImportResourceId", pendingImportResourceId);
+        state.putString("templateModelId", templateModelId);
     }
 
     private void buildUi() {
@@ -155,6 +164,16 @@ public final class MainActivity extends Activity {
                 action("取消推理", () -> runAction("取消推理", () -> graph.runtime.cancel()))));
         content.addView(statusCard);
 
+        section("核心");
+        LinearLayout coreCard = card();
+        coreStatus = text("", 14, TEXT);
+        coreCard.addView(coreStatus);
+        coreCard.addView(buttonRow(
+                action("导入核心", this::beginImportCore),
+                action("导出核心", this::beginExportCore),
+                action("更新核心", this::updateCore)));
+        content.addView(coreCard);
+
         section("配置生成的管理项");
         managementContainer = new LinearLayout(this);
         managementContainer.setOrientation(LinearLayout.VERTICAL);
@@ -183,8 +202,86 @@ public final class MainActivity extends Activity {
         content.addView(resourceCard);
 
         section("模型");
-        modelList = card();
-        content.addView(modelList);
+        LinearLayout modelCard = card();
+        modelCard.addView(buttonRow(
+                action("导入 GGUF", this::beginImportGguf),
+                action("导入 MMPROJ", () -> runAction("导入 MMPROJ", () -> {
+                    JSONArray models = graph.config.current().optJSONArray("models");
+                    if (models.length() == 0) {
+                        toast("请先导入 GGUF 模型");
+                        return;
+                    }
+                    if (models.length() > 1) {
+                        toast("存在多个模型，请在模型行上点击 配对mmproj 指定目标");
+                        return;
+                    }
+                    beginPairMmproj(models.optJSONObject(0).optString("id"));
+                }))));
+        modelList = new LinearLayout(this);
+        modelList.setOrientation(LinearLayout.VERTICAL);
+        modelCard.addView(modelList);
+        content.addView(modelCard);
+
+        section("聊天模板（jinja）");
+        LinearLayout templateCard = card();
+        templateSpinner = new Spinner(this);
+        templateCard.addView(templateSpinner, matchWrap());
+        templateEditor = new EditText(this);
+        templateEditor.setTextColor(TEXT);
+        templateEditor.setHintTextColor(MUTED);
+        templateEditor.setTextSize(12);
+        templateEditor.setTypeface(Typeface.MONOSPACE);
+        templateEditor.setGravity(Gravity.TOP | Gravity.START);
+        templateEditor.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE
+                | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        templateEditor.setMinLines(10);
+        templateEditor.setHorizontallyScrolling(true);
+        templateEditor.setBackgroundColor(Color.rgb(8, 12, 17));
+        templateEditor.setPadding(dp(12), dp(12), dp(12), dp(12));
+        templateEditor.setHint("空 = 使用 GGUF 内置模板");
+        templateCard.addView(templateEditor, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        templateCard.addView(buttonRow(
+                action("从 GGUF 读取", () -> runAction("读取内置模板", () -> {
+                    if (templateModelId == null) {
+                        toast("尚无模型");
+                        return;
+                    }
+                    String modelId = templateModelId;
+                    runBackground("读取内置模板", () -> {
+                        String template = graph.exchange.readTemplate(modelId);
+                        ui(() -> {
+                            if (template == null) {
+                                toast("该 GGUF 未内置聊天模板");
+                                return;
+                            }
+                            templateEditor.setText(template);
+                            toast("内置模板已填入，保存后生效");
+                        });
+                    });
+                })),
+                action("保存为该模型模板", () -> runAction("保存聊天模板", () -> {
+                    if (templateModelId == null) {
+                        toast("尚无模型");
+                        return;
+                    }
+                    JSONObject next = graph.config.current();
+                    JSONObject model = configModel(next, templateModelId);
+                    if (model == null) throw new IllegalArgumentException("配置中不存在模型: " + templateModelId);
+                    String content = templateEditor.getText().toString();
+                    JSONObject template = model.optJSONObject("template");
+                    if (template == null) {
+                        template = new JSONObject().put("mode", "embedded");
+                        model.put("template", template);
+                    }
+                    if (content.isEmpty()) template.remove("content");
+                    else template.put("content", content);
+                    graph.config.activate(next.toString());
+                    configEditor.setText(graph.config.currentText());
+                    refreshAll();
+                    toast("模板已保存到 " + templateModelId);
+                }))));
+        content.addView(templateCard);
 
         section("统一 JSON 配置");
         LinearLayout configCard = card();
@@ -232,12 +329,143 @@ public final class MainActivity extends Activity {
     private void refreshAll() {
         renderBackend();
         renderRuntime();
+        renderCore();
         renderResources();
         renderModels();
+        renderTemplate();
         renderManagement();
         renderUpdates();
         if (!configEditor.hasFocus()) configEditor.setText(graph.config.currentText());
         renderLog();
+    }
+
+    private void renderCore() {
+        if (coreStatus == null) return;
+        String coreId = currentCoreId();
+        if (coreId == null) {
+            coreStatus.setText("尚未安装核心。点击 导入核心 选择本地 .so 文件或 .zip 核心包。");
+            coreStatus.setTextColor(MUTED);
+            return;
+        }
+        ResourceState state = graph.resources.knownState(coreId);
+        String detail = coreId;
+        if (state != null) {
+            detail += "  ·  " + (state.version == null ? "未安装" : state.version)
+                    + "  ·  " + state.status.name().toLowerCase(Locale.ROOT);
+            if (state.error != null) detail += "\n" + state.error;
+        }
+        coreStatus.setText(detail);
+        coreStatus.setTextColor(state != null && state.status == ResourceState.Status.FAILED ? ERROR : TEXT);
+    }
+
+    private void renderTemplate() {
+        if (templateSpinner == null) return;
+        JSONArray models = graph.config.current().optJSONArray("models");
+        final List<String> ids = new ArrayList<>();
+        final List<String> labels = new ArrayList<>();
+        for (int i = 0; i < models.length(); i++) {
+            JSONObject model = models.optJSONObject(i);
+            ids.add(model.optString("id"));
+            labels.add(model.optString("name") + " · " + model.optString("id"));
+        }
+        if (templateModelId == null || !ids.contains(templateModelId)) {
+            templateModelId = ids.isEmpty() ? null : ids.get(0);
+        }
+        ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, labels);
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        templateSpinner.setAdapter(adapter);
+        templateSpinner.setSelection(templateModelId == null ? 0 : ids.indexOf(templateModelId), false);
+        templateSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                if (position < 0 || position >= ids.size()) return;
+                String modelId = ids.get(position);
+                if (modelId.equals(templateModelId)) return;
+                templateModelId = modelId;
+                if (!templateEditor.hasFocus()) templateEditor.setText(templateContentOf(modelId));
+            }
+
+            @Override
+            public void onNothingSelected(AdapterView<?> parent) {
+            }
+        });
+        if (!templateEditor.hasFocus()) {
+            templateEditor.setText(templateModelId == null ? "" : templateContentOf(templateModelId));
+        }
+    }
+
+    private void beginImportGguf() {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT)
+                .addCategory(Intent.CATEGORY_OPENABLE)
+                .setType("application/octet-stream");
+        startActivityForResult(intent, IMPORT_GGUF);
+    }
+
+    private void beginImportCore() {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT)
+                .addCategory(Intent.CATEGORY_OPENABLE)
+                .setType("*/*");
+        startActivityForResult(intent, IMPORT_CORE);
+    }
+
+    private void beginExportCore() {
+        runAction("导出核心", () -> {
+            String coreId = currentCoreId();
+            if (coreId == null) {
+                toast("尚未安装核心");
+                return;
+            }
+            pendingExportCoreId = coreId;
+            Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT)
+                    .addCategory(Intent.CATEGORY_OPENABLE)
+                    .setType("application/zip")
+                    .putExtra(Intent.EXTRA_TITLE, coreId + ".zip");
+            startActivityForResult(intent, EXPORT_CORE);
+        });
+    }
+
+    private void updateCore() {
+        runAction("更新核心", () -> {
+            String coreId = currentCoreId();
+            if (coreId == null) {
+                toast("尚未安装核心");
+                return;
+            }
+            BackendService.command(this, BackendService.ACTION_START);
+            graph.resources.install(coreId);
+        });
+    }
+
+    private void beginPairMmproj(String modelId) {
+        pendingPairModelId = modelId;
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT)
+                .addCategory(Intent.CATEGORY_OPENABLE)
+                .setType("application/octet-stream");
+        startActivityForResult(intent, IMPORT_MMPROJ);
+    }
+
+    private String currentCoreId() {
+        JSONArray resources = graph.config.current().optJSONArray("resources");
+        for (int i = 0; i < resources.length(); i++) {
+            JSONObject descriptor = resources.optJSONObject(i);
+            if ("core".equals(descriptor.optString("type"))) return descriptor.optString("id");
+        }
+        return null;
+    }
+
+    private static JSONObject configModel(JSONObject config, String modelId) {
+        JSONArray models = config.optJSONArray("models");
+        for (int i = 0; i < models.length(); i++) {
+            JSONObject model = models.optJSONObject(i);
+            if (modelId.equals(model.optString("id"))) return model;
+        }
+        return null;
+    }
+
+    private String templateContentOf(String modelId) {
+        JSONObject model = configModel(graph.config.current(), modelId);
+        if (model == null) return "";
+        return model.optJSONObject("template").optString("content");
     }
 
     private void renderBackend() {
@@ -415,8 +643,6 @@ public final class MainActivity extends Activity {
                         action("激活配置", () -> activateConfigResource(state.id))));
             } else if ("template".equals(state.type) && state.usable()) {
                 row.addView(buttonRow(install, delete, action("查看", () -> viewTextResource(state.id))));
-            } else if ("model".equals(state.type)) {
-                row.addView(buttonRow(install, action("导入本地 GGUF", () -> beginModelImport(state.id)), delete));
             } else {
                 row.addView(buttonRow(install, delete));
             }
@@ -433,18 +659,43 @@ public final class MainActivity extends Activity {
         for (int i = 0; i < models.length(); i++) {
             JSONObject model = models.optJSONObject(i);
             String id = model.optString("id");
+            String resourceId = model.optString("resource");
+            String mmproj = model.optString("mmproj");
             LinearLayout row = new LinearLayout(this);
             row.setOrientation(LinearLayout.VERTICAL);
             row.setPadding(0, dp(8), 0, dp(8));
             row.addView(text(model.optString("name") + "  ·  " + id, 14, TEXT));
-            row.addView(text(id.equals(runtime.modelId) ? "当前模型 · " + runtime.phase.name().toLowerCase(Locale.ROOT)
-                    : "未加载", 12, id.equals(runtime.modelId) ? PRIMARY : MUTED));
+            row.addView(text((id.equals(runtime.modelId) ? "当前模型 · " + runtime.phase.name().toLowerCase(Locale.ROOT)
+                    : "未加载") + (mmproj.isEmpty() ? "  ·  纯文本" : "  ·  多模态 已配对"),
+                    12, id.equals(runtime.modelId) ? PRIMARY : MUTED));
             row.addView(buttonRow(
                     action("加载", () -> runBackground("加载模型", () -> graph.runtime.loadModel(id))),
-                    action("卸载", () -> runAction("卸载模型", () -> graph.runtime.unload()))));
+                    action("卸载", () -> runAction("卸载模型", () -> graph.runtime.unload())),
+                    action(mmproj.isEmpty() ? "配对mmproj" : "换mmproj", () -> beginPairMmproj(id)),
+                    action("删除", () -> runAction("删除模型", () -> deleteModel(id)))));
             modelList.addView(row);
         }
-        if (models.length() == 0) modelList.addView(text("配置中尚无模型。", 13, MUTED));
+        if (models.length() == 0) modelList.addView(text("尚无模型。点击 导入 GGUF 从本地选择 .gguf 文件。", 13, MUTED));
+    }
+
+    private void deleteModel(String modelId) throws Exception {
+        RuntimeState runtime = graph.runtime.state();
+        if (modelId.equals(runtime.modelId)) graph.runtime.unload();
+        JSONObject next = graph.config.current();
+        JSONObject model = configModel(next, modelId);
+        if (model == null) throw new IllegalArgumentException("配置中不存在模型: " + modelId);
+        JSONArray models = next.optJSONArray("models");
+        JSONArray kept = new JSONArray();
+        for (int i = 0; i < models.length(); i++) {
+            JSONObject item = models.optJSONObject(i);
+            if (!modelId.equals(item.optString("id"))) kept.put(item);
+        }
+        next.put("models", kept);
+        graph.config.activate(next.toString());
+        graph.resources.delete(model.optString("resource"));
+        String mmproj = model.optString("mmproj");
+        if (!mmproj.isEmpty()) graph.resources.delete(mmproj);
+        refreshAll();
     }
 
     private void renderLog() {
@@ -501,14 +752,6 @@ public final class MainActivity extends Activity {
         startActivityForResult(intent, IMPORT_CONFIG);
     }
 
-    private void beginModelImport(String id) {
-        pendingImportResourceId = id;
-        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT)
-                .addCategory(Intent.CATEGORY_OPENABLE)
-                .setType("application/octet-stream");
-        startActivityForResult(intent, IMPORT_MODEL);
-    }
-
     private boolean modelUsesResource(String modelId, String resourceId) {
         if (modelId == null) return false;
         JSONArray models = graph.config.current().optJSONArray("models");
@@ -516,6 +759,7 @@ public final class MainActivity extends Activity {
             JSONObject model = models.optJSONObject(i);
             if (modelId.equals(model.optString("id"))) {
                 return resourceId.equals(model.optString("resource"))
+                        || resourceId.equals(model.optString("mmproj"))
                         || resourceId.equals(model.optJSONObject("template").optString("resource"));
             }
         }
@@ -556,30 +800,57 @@ public final class MainActivity extends Activity {
         super.onActivityResult(requestCode, resultCode, data);
         if (resultCode != RESULT_OK || data == null || data.getData() == null) return;
         Uri uri = data.getData();
-        runAction("文档操作", () -> {
-            if (requestCode == IMPORT_CONFIG) {
+        if (requestCode == IMPORT_GGUF) {
+            runBackground("导入 GGUF 模型", () -> {
+                String modelId = graph.exchange.importModel(uri);
+                runBackground("读取内置模板", () -> {
+                    String template = graph.exchange.readTemplate(modelId);
+                    ui(() -> {
+                        templateModelId = modelId;
+                        refreshAll();
+                        if (template != null) {
+                            templateEditor.setText(template);
+                            toast("模型已导入，内置模板已填入模板框");
+                        } else {
+                            toast("模型已导入，该文件未内置聊天模板");
+                        }
+                    });
+                });
+            });
+        } else if (requestCode == IMPORT_CORE) {
+            runBackground("导入核心", () -> graph.exchange.importCore(uri));
+        } else if (requestCode == IMPORT_MMPROJ) {
+            String modelId = pendingPairModelId;
+            pendingPairModelId = null;
+            runBackground("配对 MMPROJ", () -> {
+                if (modelId == null) throw new IllegalStateException("配对目标已丢失");
+                graph.exchange.importMmproj(uri, modelId);
+            });
+        } else if (requestCode == EXPORT_CORE) {
+            String coreId = pendingExportCoreId;
+            pendingExportCoreId = null;
+            runBackground("导出核心", () -> {
+                if (coreId == null) throw new IllegalStateException("导出目标已丢失");
+                graph.exchange.exportCore(coreId, uri);
+            });
+        } else if (requestCode == IMPORT_CONFIG) {
+            runAction("导入配置", () -> {
                 try (InputStream input = getContentResolver().openInputStream(uri)) {
                     if (input == null) throw new IllegalStateException("系统未提供导入流");
                     configEditor.setText(graph.config.readImport(input));
                     toast("导入内容已载入，请检查后原子激活");
                 }
-            } else if (requestCode == IMPORT_MODEL) {
-                String id = pendingImportResourceId;
-                pendingImportResourceId = null;
-                if (id == null) throw new IllegalStateException("模型导入目标已丢失");
-                runBackground("导入本地模型", () -> {
-                    try (InputStream input = getContentResolver().openInputStream(uri)) {
-                        if (input == null) throw new IllegalStateException("系统未提供模型输入流");
-                        graph.resources.importResource(id, input);
-                    }
-                });
-            } else if (requestCode == EXPORT_CONFIG) {
+            });
+        } else if (requestCode == EXPORT_CONFIG) {
+            runAction("导出配置", () -> {
                 try (OutputStream output = getContentResolver().openOutputStream(uri, "wt")) {
                     if (output == null) throw new IllegalStateException("系统未提供导出流");
                     graph.config.exportTo(output);
                 }
                 toast("配置已导出");
-            } else if (requestCode == EXPORT_LOG) {
+            });
+        } else if (requestCode == EXPORT_LOG) {
+            runAction("导出日志", () -> {
                 try (InputStream input = new FileInputStream(graph.events.file());
                      OutputStream output = getContentResolver().openOutputStream(uri, "wt")) {
                     if (output == null) throw new IllegalStateException("系统未提供导出流");
@@ -589,8 +860,8 @@ public final class MainActivity extends Activity {
                     output.flush();
                 }
                 toast("诊断日志已导出");
-            }
-        });
+            });
+        }
     }
 
     private void runAction(String operation, ThrowingAction action) {

@@ -131,8 +131,8 @@ public final class ResourceManager {
         }
     }
 
-    public void importResource(String id, InputStream input) throws IOException {
-        JSONObject descriptor = descriptor(id);
+    public void importResource(JSONObject descriptor, InputStream input) throws IOException {
+        String id = descriptor.optString("id");
         ResourceState existing;
         synchronized (this) {
             existing = states.get(id);
@@ -325,12 +325,17 @@ public final class ResourceManager {
         if (targetDirectory.exists()) deleteTree(targetDirectory);
 
         if ("core".equals(type)) {
-            File staging = new File(idDirectory, version + ".candidate");
-            if (staging.exists()) deleteTree(staging);
-            ensureDirectory(staging);
-            unzip(partial, staging);
-            AtomicFiles.move(staging, targetDirectory);
-            if (!partial.delete()) throw new IOException("无法删除已安装的核心包暂存文件");
+            if (isZipArchive(partial)) {
+                File staging = new File(idDirectory, version + ".candidate");
+                if (staging.exists()) deleteTree(staging);
+                ensureDirectory(staging);
+                unzip(partial, staging);
+                AtomicFiles.move(staging, targetDirectory);
+            } else {
+                ensureDirectory(targetDirectory);
+                AtomicFiles.move(partial, new File(targetDirectory, source.optString("entry")));
+            }
+            if (partial.isFile() && !partial.delete()) throw new IOException("无法删除已安装的核心包暂存文件");
             return new File(targetDirectory, source.optString("entry"));
         }
 
@@ -339,6 +344,12 @@ public final class ResourceManager {
         File target = new File(targetDirectory, id + extension);
         AtomicFiles.move(partial, target);
         return target;
+    }
+
+    private static boolean isZipArchive(File file) throws IOException {
+        try (FileInputStream input = new FileInputStream(file)) {
+            return input.read() == 'P' && input.read() == 'K';
+        }
     }
 
     private void unzip(File archive, File target) throws IOException {

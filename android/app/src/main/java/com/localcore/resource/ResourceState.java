@@ -48,12 +48,18 @@ public final class ResourceState {
     }
 
     public static ResourceState fromJson(JSONObject value) {
+        Status status;
+        try {
+            status = Status.valueOf(value.optString("status"));
+        } catch (IllegalArgumentException error) {
+            status = Status.FAILED;
+        }
         return new ResourceState(
                 value.optString("id"),
                 value.optString("type"),
                 value.optString("version"),
                 value.has("targetVersion") ? value.optString("targetVersion") : value.optString("version"),
-                Status.valueOf(value.optString("status")),
+                status,
                 value.optLong("downloaded"),
                 value.optLong("total"),
                 value.isNull("path") ? null : value.optString("path"),

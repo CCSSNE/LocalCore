@@ -16,6 +16,7 @@ public final class AppGraph {
     public final RuntimeManager runtime;
     public final BackendStatusStore backend;
     public final UpdateManager updates;
+    public final LocalExchange exchange;
 
     public AppGraph(Context context) {
         Context app = context.getApplicationContext();
@@ -27,5 +28,6 @@ public final class AppGraph {
         runtime = new RuntimeManager(config, resources, events);
         backend = new BackendStatusStore();
         updates = new UpdateManager(config, resources, events);
+        exchange = new LocalExchange(app, config, resources, events);
     }
 }

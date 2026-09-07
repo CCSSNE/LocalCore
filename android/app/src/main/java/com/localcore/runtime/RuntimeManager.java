@@ -267,7 +267,9 @@ public final class RuntimeManager {
 
     private String template(JSONObject model) {
         JSONObject binding = model.optJSONObject("template");
-        if ("embedded".equals(binding.optString("mode"))) return null;
+        String content = binding.optString("content");
+        if (!content.isEmpty()) return content;
+        if (!"resource".equals(binding.optString("mode"))) return null;
         File file = resources.installedFile(binding.optString("resource"));
         try (FileInputStream input = new FileInputStream(file)) {
             return Jsons.readUtf8(input);
