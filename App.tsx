@@ -252,9 +252,6 @@ export default function App() {
     ready: false,
   });
   const [rightOpen, setRightOpen] = useState(false);
-  const [hotForm, setHotForm] = useState<Record<string, string>>(hotToForm(DEFAULT_HOT));
-  const [hotOrig, setHotOrig] = useState<Record<string, string>>(hotToForm(DEFAULT_HOT));
-  const hotNums = useRef<Record<string, any>>({...DEFAULT_HOT});
   const [coreRt, setCoreRt] = useState<{cuPhase: string | null; cuError: string | null}>({
     cuPhase: null,
     cuError: null,
