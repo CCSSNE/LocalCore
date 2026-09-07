@@ -748,7 +748,7 @@ export default function App() {
         ? '暂无模型，先去模型屏导入'
         : chatGate.loaded
           ? null
-          : '模型未加载，先去模型屏点加载';
+          : '点击此处或者模型界面加载模型';
     const gateCanGoModel = !chatGate.loading && chatGate.models > 0 && !chatGate.loaded;
     const inputLocked = !!busy || gateHint !== null;
     const generating = busy === '聊天推理';
