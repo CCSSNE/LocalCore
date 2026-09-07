@@ -8,6 +8,7 @@ import {
   NativeModules,
   Pressable,
   ScrollView,
+  StatusBar,
   StyleSheet,
   Text,
   TextInput,
@@ -1503,7 +1504,9 @@ export default function App() {
 
       <Modal visible={drawerOpen} transparent animationType="fade" onRequestClose={() => setDrawerOpen(false)}>
         <Pressable style={styles.drawerMask} onPress={() => setDrawerOpen(false)}>
-          <Pressable style={styles.drawer} onPress={e => e.stopPropagation()}>
+          <Pressable
+            style={[styles.drawer, {paddingTop: (StatusBar.currentHeight ?? 24) + 8}]}
+            onPress={e => e.stopPropagation()}>
             <Text style={styles.drawerTitle}>LocalCore</Text>
             {ROUTES.map(r => (
               <TouchableOpacity
@@ -1537,7 +1540,7 @@ export default function App() {
             <Text style={styles.settingsTitle} numberOfLines={1}>
               设置{tplModel ? ' - ' + tplModel.name : ''}
             </Text>
-            <Text style={styles.hint}>加载项下次加载生效；退出自动保存</Text>
+            <Text style={styles.hint}>加载项下次加载生效</Text>
             {tplLoading ? (
               <View style={styles.centerBox}>
                 <ActivityIndicator />
@@ -1631,7 +1634,9 @@ export default function App() {
 
       {rightOpen ? (
         <Pressable style={styles.rightMask} onPress={closeRightDrawer}>
-          <Pressable style={styles.rightDrawer} onPress={e => e.stopPropagation()}>
+          <Pressable
+            style={[styles.rightDrawer, {paddingTop: (StatusBar.currentHeight ?? 24) + 8}]}
+            onPress={e => e.stopPropagation()}>
             <View style={styles.rightHead}>
               <Text style={styles.drawerTitle}>推理设置</Text>
               <TouchableOpacity onPress={closeRightDrawer} style={styles.iconBtn}>
@@ -1662,7 +1667,6 @@ export default function App() {
                 style={styles.settingsInput}
               />
             </ScrollView>
-            <Text style={styles.hint}>收起自动保存；下次请求生效</Text>
           </Pressable>
         </Pressable>
       ) : null}
@@ -1915,7 +1919,7 @@ const styles = StyleSheet.create({
   logOk: {color: '#1b5e20'},
   logFail: {color: '#b00020'},
   drawerMask: {flex: 1, backgroundColor: 'rgba(0,0,0,0.3)', flexDirection: 'row'},
-  drawer: {width: 280, backgroundColor: '#ffffff', paddingTop: 56, paddingHorizontal: 12},
+  drawer: {width: 280, backgroundColor: '#ffffff', paddingHorizontal: 12},
   drawerTitle: {fontSize: 18, fontWeight: 'bold', marginBottom: 16, marginLeft: 8, color: '#111111'},
   drawerItem: {paddingVertical: 12, paddingHorizontal: 10, borderRadius: 8},
   drawerItemActive: {backgroundColor: '#e8eefc'},
@@ -1931,7 +1935,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'flex-end',
   },
-  rightDrawer: {width: 280, backgroundColor: '#ffffff', paddingTop: 56, paddingHorizontal: 12},
+  rightDrawer: {width: 280, backgroundColor: '#ffffff', paddingHorizontal: 12},
   rightHead: {flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8},
   rightScroll: {flex: 1},
   clearBtn: {marginBottom: 10, alignItems: 'center'},
