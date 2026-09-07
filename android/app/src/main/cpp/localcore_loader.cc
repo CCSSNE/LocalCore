@@ -25,8 +25,6 @@ using infer2_fn = int (*)(void *, const char *, localcore_token_callback, void *
         localcore_progress_callback, void *, char **, char **);
 using infer3_fn = int (*)(void *, const char *, localcore_token_callback, void *,
         localcore_progress_callback2, void *, char **, char **);
-using infer3_fn = int (*)(void *, const char *, localcore_token_callback, void *,
-        localcore_progress_callback, void *, localcore_progress_callback2, void *, char **, char **);
 using cancel_fn = void (*)(void *);
 using free_string_fn = void (*)(char *);
 
