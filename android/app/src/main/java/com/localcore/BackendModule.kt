@@ -51,6 +51,48 @@ class BackendModule(private val reactContext: ReactApplicationContext) :
   }
 
   @ReactMethod
+  fun importCore(path: String, promise: Promise) {
+    try {
+      application.graph.exchange.importCore(android.net.Uri.fromFile(java.io.File(path)))
+      promise.resolve(application.graph.exchange.currentCoreId())
+    } catch (error: Exception) {
+      promise.reject("IMPORT_CORE_FAILED", error.message, error)
+    }
+  }
+
+  @ReactMethod
+  fun importModel(path: String, promise: Promise) {
+    try {
+      promise.resolve(application.graph.exchange.importModel(android.net.Uri.fromFile(java.io.File(path))))
+    } catch (error: Exception) {
+      promise.reject("IMPORT_MODEL_FAILED", error.message, error)
+    }
+  }
+
+  @ReactMethod
+  fun loadModel(modelId: String, promise: Promise) {
+    try {
+      application.graph.runtime.loadModel(modelId)
+      promise.resolve(null)
+    } catch (error: Exception) {
+      promise.reject("LOAD_FAILED", error.message, error)
+    }
+  }
+
+  @ReactMethod
+  fun testChat(modelId: String, prompt: String, promise: Promise) {
+    try {
+      val graph = application.graph
+      val messages = org.json.JSONArray().put(
+          org.json.JSONObject().put("role", "user").put("content", prompt))
+      val result = graph.runtime.chat(messages, org.json.JSONObject(), null)
+      promise.resolve(result.text)
+    } catch (error: Exception) {
+      promise.reject("CHAT_FAILED", error.message, error)
+    }
+  }
+
+  @ReactMethod
   fun preloadCore(soPath: String, promise: Promise) {
     try {
       System.load(soPath)

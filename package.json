@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "start": "react-native start",
-    "build:android:release": "cd android && gradlew.bat assembleRelease"
+    "build:android:release": "cd android && gradlew.bat assembleRelease -PrnllamaBuildFromSource=false"
   },
   "dependencies": {
     "llama.rn": "0.13.0-rc.2",
