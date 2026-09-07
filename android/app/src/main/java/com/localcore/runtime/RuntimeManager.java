@@ -34,13 +34,18 @@ public final class RuntimeManager {
         public final String text;
         public final JSONObject message;
         public final boolean structured;
+        public final long ttftMs;
+        public final long llmMs;
 
-        public Result(int promptTokens, int completionTokens, String text, JSONObject message, boolean structured) {
+        public Result(int promptTokens, int completionTokens, String text, JSONObject message, boolean structured,
+                      long ttftMs, long llmMs) {
             this.promptTokens = promptTokens;
             this.completionTokens = completionTokens;
             this.text = text;
             this.message = message;
             this.structured = structured;
+            this.ttftMs = ttftMs;
+            this.llmMs = llmMs;
         }
     }
 
@@ -152,18 +157,26 @@ public final class RuntimeManager {
 
     private Result runInference(String kind, JSONObject body, TokenConsumer consumer) {
         inference.lock();
+        final long startedAt = System.currentTimeMillis();
+        final long[] firstTokenAt = {0};
+        final TokenConsumer timed = consumer == null ? null : token -> {
+            if (firstTokenAt[0] == 0) firstTokenAt[0] = System.currentTimeMillis();
+            return consumer.onToken(token);
+        };
         try {
             if (loadedModelId == null) throw new IllegalStateException("尚未加载模型");
             RuntimeState before = state();
             setState(new RuntimeState(RuntimeState.Phase.GENERATING,
                     before.coreId, before.coreVersion, loadedModelId, null));
             body.put("type", kind);
-            JSONObject response = new JSONObject(nativeRuntime.infer(body.toString(), consumer));
+            JSONObject response = new JSONObject(nativeRuntime.infer(body.toString(), timed));
             setState(new RuntimeState(RuntimeState.Phase.MODEL_READY,
                     before.coreId, before.coreVersion, loadedModelId, null));
+            long elapsed = System.currentTimeMillis() - startedAt;
+            long ttft = firstTokenAt[0] == 0 ? elapsed : firstTokenAt[0] - startedAt;
             return new Result(response.getInt("promptTokens"), response.getInt("completionTokens"),
                     response.getString("text"), response.optJSONObject("message"),
-                    response.optBoolean("structured"));
+                    response.optBoolean("structured"), ttft, elapsed);
         } catch (Exception error) {
             RuntimeState before = state();
             setState(new RuntimeState(RuntimeState.Phase.ERROR, before.coreId, before.coreVersion,

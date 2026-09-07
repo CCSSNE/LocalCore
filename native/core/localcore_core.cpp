@@ -264,7 +264,8 @@ bool stopped(const std::string & text, const std::vector<std::string> & stops, s
 
 std::string generate(Engine & runtime, common_params_sampling & params,
                      int32_t max_tokens, const std::vector<std::string> & stops,
-                     int & completion_tokens) {
+                     int & completion_tokens, localcore_token_callback callback,
+                     void * user_data, bool & streamed) {
     owned<common_sampler, common_sampler_free> sampler(
             common_sampler_init(runtime.model, params), common_sampler_free);
     if (!sampler) throw std::runtime_error("采样器初始化失败");
@@ -276,8 +277,13 @@ std::string generate(Engine & runtime, common_params_sampling & params,
         llama_token token = common_sampler_sample(sampler.get(), runtime.context, -1);
         common_sampler_accept(sampler.get(), token, true);
         if (llama_vocab_is_eog(vocab, token)) break;
-        output += common_token_to_piece(vocab, token, true);
+        std::string piece = common_token_to_piece(vocab, token, true);
+        output += piece;
         completion_tokens++;
+        if (callback != nullptr && !piece.empty()) {
+            streamed = true;
+            if (callback(piece.data(), piece.size(), user_data) == 0) break;
+        }
         size_t stop_at = 0;
         if (stopped(output, stops, stop_at)) {
             output.resize(stop_at);
@@ -417,8 +423,10 @@ extern "C" LOCALCORE_EXPORT int localcore_core_infer(
                 ? evaluate_text(runtime, prompt) : evaluate_media(runtime, prompt, media_paths);
         common_params_sampling params = sampling_params(runtime, request, chat_pointer);
         int completion_tokens = 0;
+        bool streamed = false;
         std::string text = generate(runtime, params,
-                int_value(request, "max_tokens", 1024), string_array(request, "stop"), completion_tokens);
+                int_value(request, "max_tokens", 1024), string_array(request, "stop"), completion_tokens,
+                callback, user_data, streamed);
         common_chat_msg message;
         common_chat_msg * message_pointer = nullptr;
         if (chat_pointer != nullptr) {
@@ -432,7 +440,8 @@ extern "C" LOCALCORE_EXPORT int localcore_core_infer(
             message_pointer = &message;
         }
         const std::string & callback_text = message_pointer == nullptr ? text : message_pointer->content;
-        if (callback != nullptr && !callback_text.empty()
+        // 已逐 token 推送过的不再补一次全文；老核心行为（单次全量回调）保持不变。
+        if (!streamed && callback != nullptr && !callback_text.empty()
                 && callback(callback_text.data(), callback_text.size(), user_data) == 0) {
             throw std::runtime_error("响应消费者拒绝生成文本");
         }

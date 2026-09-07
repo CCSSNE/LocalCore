@@ -12,6 +12,8 @@ import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
+import com.facebook.react.modules.core.DeviceEventEmitterModule
+import com.localcore.runtime.RuntimeManager
 import com.localcore.runtime.RuntimeState
 import com.localcore.service.BackendService
 
@@ -135,31 +137,48 @@ class BackendModule(private val reactContext: ReactApplicationContext) :
   }
 
   @ReactMethod
-  fun testChat(modelId: String, prompt: String, promise: Promise) {
+  fun chatStream(modelId: String, prompt: String, imageUriString: String?, promise: Promise) {
     runAsync(promise, "CHAT_FAILED") {
-      val messages = org.json.JSONArray().put(
-          org.json.JSONObject().put("role", "user").put("content", prompt))
-      application.graph.runtime.chat(messages, org.json.JSONObject(), null).text
+      if (imageUriString == null) {
+        streamChat(modelId, prompt, null)
+      } else {
+        // MediaResolver 只接受 data:base64 或 URL 能直接打开的地址，content:// 必须先落到缓存文件再转 file://。
+        val imageFile = copyUriToCache(Uri.parse(imageUriString))
+        try {
+          streamChat(modelId, prompt, imageFile.toURI().toString())
+        } finally {
+          imageFile.delete()
+        }
+      }
     }
   }
 
-  @ReactMethod
-  fun testChatWithImage(modelId: String, prompt: String, imageUriString: String, promise: Promise) {
-    runAsync(promise, "CHAT_FAILED") {
-      // MediaResolver 只接受 data:base64 或 URL 能直接打开的地址，content:// 必须先落到缓存文件再转 file://。
-      val imageFile = copyUriToCache(android.net.Uri.parse(imageUriString))
-      try {
-        val content = org.json.JSONArray()
-            .put(org.json.JSONObject().put("type", "text").put("text", prompt))
-            .put(org.json.JSONObject().put("type", "image_url")
-                .put("image_url", org.json.JSONObject().put("url", imageFile.toURI().toString())))
-        val messages = org.json.JSONArray().put(
-            org.json.JSONObject().put("role", "user").put("content", content))
-        application.graph.runtime.chat(messages, org.json.JSONObject(), null).text
-      } finally {
-        imageFile.delete()
-      }
+  private fun streamChat(modelId: String, prompt: String, imageUrl: String?): String {
+    val messages = if (imageUrl == null) {
+      org.json.JSONArray().put(
+          org.json.JSONObject().put("role", "user").put("content", prompt))
+    } else {
+      val content = org.json.JSONArray()
+          .put(org.json.JSONObject().put("type", "text").put("text", prompt))
+          .put(org.json.JSONObject().put("type", "image_url")
+              .put("image_url", org.json.JSONObject().put("url", imageUrl)))
+      org.json.JSONArray().put(
+          org.json.JSONObject().put("role", "user").put("content", content))
     }
+    // 单飞行：JS 侧 busy 锁保证同一时间只有一个流，无需 id 分流。
+    val emitter = reactContext.getJSModule(DeviceEventEmitterModule.RCTDeviceEventEmitter::class.java)
+    val result = application.graph.runtime.chat(messages, org.json.JSONObject(),
+        RuntimeManager.TokenConsumer { token ->
+          emitter.emit("LocalCoreChatToken", token)
+          true
+        })
+    return org.json.JSONObject()
+        .put("text", result.text)
+        .put("promptTokens", result.promptTokens)
+        .put("completionTokens", result.completionTokens)
+        .put("ttftMs", result.ttftMs)
+        .put("llmMs", result.llmMs)
+        .toString()
   }
 
   private fun copyUriToCache(uri: android.net.Uri): java.io.File {
