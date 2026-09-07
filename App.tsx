@@ -80,7 +80,7 @@ function StatsStrip({stats}: {stats: TurnStats}) {
   return (
     <TouchableOpacity onPress={() => setOpen(v => !v)} style={styles.statsBox}>
       <Text style={styles.statsText}>
-        {open ? body + ' ▲' : head + ' ▼'}
+        {open ? body : head + ' ▼'}
       </Text>
     </TouchableOpacity>
   );
