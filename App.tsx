@@ -16,6 +16,7 @@ import {
 } from 'react-native';
 import ImageView from 'react-native-image-viewing';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import ModelDownloadScreen from './ModelDownloadScreen';
 
 const {Backend} = NativeModules;
 const chatEvents = new NativeEventEmitter(NativeModules.Backend);
@@ -23,7 +24,7 @@ const CHAT_KEY = 'localcore.chat.v1';
 const SETTINGS_KEY = 'localcore.settings.v1';
 const DEFAULT_BUDGET_PX = 100000;
 
-type RouteKey = 'chat' | 'core' | 'model' | 'backend' | 'log';
+type RouteKey = 'chat' | 'core' | 'model' | 'download' | 'backend' | 'log';
 
 // 侧边栏顺序按用户要求：后端在日志上面，日志沉底。
 // 主屏叫测试：无上下文单轮，用完即走，不做复杂功能。
@@ -31,6 +32,7 @@ const ROUTES: Array<{key: RouteKey; title: string}> = [
   {key: 'chat', title: '测试'},
   {key: 'core', title: '核心'},
   {key: 'model', title: '模型'},
+  {key: 'download', title: '模型下载'},
   {key: 'backend', title: '后端'},
   {key: 'log', title: '日志'},
 ];
@@ -39,6 +41,7 @@ const TITLES: Record<RouteKey, string> = {
   chat: '测试',
   core: '核心管理',
   model: '模型管理',
+  download: '模型下载',
   backend: '后端服务',
   log: '日志',
 };
@@ -100,7 +103,16 @@ function StatsStrip({stats}: {stats: TurnStats}) {
     </TouchableOpacity>
   );
 }
-type ModelEntry = {id: string; name: string; paired: boolean};
+type ModelEntry = {
+  id: string;
+  name: string;
+  paired: boolean;
+  ready: boolean;
+  resourceStatus: string;
+  resourceError: string | null;
+  contextPending: boolean;
+  registrationError: string | null;
+};
 
 function pickAnd(pickLabel: string, after: (uri: string) => Promise<any>) {
   return async () => {
@@ -123,13 +135,30 @@ async function firstModelId(): Promise<string> {
 function parseModels(root: any): ModelEntry[] {
   const arr = root?.config?.models;
   if (!Array.isArray(arr)) throw new Error('状态中没有 config.models');
-  return arr.map((m: any) => ({
-    id: String(m?.id ?? ''),
-    name: String(m?.name ?? m?.id ?? '未命名'),
-    paired:
-      !!(m?.mmproj && String(m.mmproj).length > 0) ||
-      (Array.isArray(m?.capabilities) && m.capabilities.includes('vision')),
-  }));
+  const resourceStates = new Map<string, any>();
+  if (Array.isArray(root?.resourceStates)) {
+    root.resourceStates.forEach((state: any) => resourceStates.set(String(state?.id ?? ''), state));
+  }
+  return arr.map((m: any) => {
+    const resource = resourceStates.get(String(m?.resource ?? ''));
+    const source = m?.source ?? {};
+    const registrationError = source?.registrationError == null
+      ? null
+      : String(source.registrationError);
+    const contextPending = !!source?.contextPending;
+    return {
+      id: String(m?.id ?? ''),
+      name: String(m?.name ?? m?.id ?? '未命名'),
+      paired:
+        !!(m?.mmproj && String(m.mmproj).length > 0) ||
+        (Array.isArray(m?.capabilities) && m.capabilities.includes('vision')),
+      ready: !!resource?.path && !contextPending && !registrationError,
+      resourceStatus: String(resource?.status ?? 'MISSING'),
+      resourceError: resource?.error == null ? null : String(resource.error),
+      contextPending,
+      registrationError,
+    };
+  });
 }
 
 function ImageIcon() {
@@ -1106,10 +1135,29 @@ export default function App() {
             {loadedId === model.id && runtimePhase === 'error' ? (
               <Text style={styles.tagError}>加载失败</Text>
             ) : null}
+            {!model.ready && model.registrationError ? (
+              <Text style={styles.tagError}>登记失败</Text>
+            ) : !model.ready && model.contextPending ? (
+              <Text style={styles.tagLoading}>登记中</Text>
+            ) : !model.ready &&
+              (model.resourceStatus === 'QUEUED' || model.resourceStatus === 'DOWNLOADING') ? (
+              <Text style={styles.tagLoading}>下载中</Text>
+            ) : !model.ready && model.resourceStatus === 'FAILED' ? (
+              <Text style={styles.tagError}>下载失败</Text>
+            ) : !model.ready && model.resourceStatus === 'CANCELLED' ? (
+              <Text style={styles.tagError}>已取消</Text>
+            ) : !model.ready ? (
+              <Text style={styles.tagError}>未下载</Text>
+            ) : null}
           </View>
           {loadedId === model.id && runtimePhase === 'error' && runtimeError ? (
             <Text style={styles.loadErrorText} numberOfLines={2}>
               {runtimeError}
+            </Text>
+          ) : null}
+          {!model.ready && (model.registrationError || model.resourceError) ? (
+            <Text style={styles.loadErrorText} selectable>
+              {model.registrationError ?? model.resourceError}
             </Text>
           ) : null}
           <View style={styles.rowBtns}>
@@ -1127,8 +1175,8 @@ export default function App() {
               </TouchableOpacity>
             ) : (
               <TouchableOpacity
-                style={styles.btn}
-                disabled={!!busy}
+                style={[styles.btn, !model.ready && styles.btnDisabled]}
+                disabled={!!busy || !model.ready}
                 onPress={() =>
                   run('加载模型', () => Backend.loadModel(model.id), () => {
                     fetchModels();
@@ -1300,9 +1348,11 @@ export default function App() {
           ? renderCore()
           : route === 'model'
             ? renderModel()
-            : route === 'backend'
-              ? renderBackend()
-              : renderLog()}
+            : route === 'download'
+              ? <ModelDownloadScreen />
+              : route === 'backend'
+                ? renderBackend()
+                : renderLog()}
 
       <Modal visible={drawerOpen} transparent animationType="fade" onRequestClose={() => setDrawerOpen(false)}>
         <Pressable style={styles.drawerMask} onPress={() => setDrawerOpen(false)}>
@@ -1554,6 +1604,7 @@ const styles = StyleSheet.create({
   },
   btnFlex: {flex: 1, alignItems: 'center'},
   btnLast: {marginRight: 0},
+  btnDisabled: {opacity: 0.45},
   card: {
     padding: 12,
     marginBottom: 10,
