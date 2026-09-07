@@ -102,6 +102,9 @@ export default function App() {
   const [modelError, setModelError] = useState<string | null>(null);
   const [listLoading, setListLoading] = useState(false);
   const [loadedId, setLoadedId] = useState<string | null>(null);
+  const [coreInfo, setCoreInfo] = useState<{id: string; version: string} | null>(null);
+  const [coreError, setCoreError] = useState<string | null>(null);
+  const [coreLoading, setCoreLoading] = useState(false);
   const chatScroll = useRef<ScrollView | null>(null);
   const logScroll = useRef<ScrollView | null>(null);
 
@@ -154,9 +157,40 @@ export default function App() {
     }
   };
 
+  const fetchCore = async () => {
+    setCoreLoading(true);
+    try {
+      const value = String(await Backend.getBackendState());
+      const root = JSON.parse(value);
+      const resources = root?.config?.resources;
+      let found: {id: string; version: string} | null = null;
+      if (Array.isArray(resources)) {
+        const core = resources.find((r: any) => r?.type === 'core');
+        if (core) {
+          found = {
+            id: String(core.id ?? 'localcore.core'),
+            version: String(core.version ?? root?.runtime?.coreVersion ?? '未知'),
+          };
+        }
+      }
+      setCoreInfo(found);
+      setStateCache(value);
+      setCoreError(null);
+    } catch (error: any) {
+      const message = error?.message ?? String(error);
+      setCoreError(message);
+      push('fail', 'FAIL 刷新核心 => ' + message);
+    } finally {
+      setCoreLoading(false);
+    }
+  };
+
   useEffect(() => {
     if (route === 'model') {
       fetchModels();
+    }
+    if (route === 'core') {
+      fetchCore();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [route]);
@@ -284,35 +318,58 @@ export default function App() {
     </View>
   );
 
+  const importCore = () =>
+    run('导入核心', pickAnd('导入核心', uri => Backend.importCore(uri)), () => {
+      fetchCore();
+    });
+
+  const updateCore = () =>
+    run('从仓库 Release 下载/更新核心', () => Backend.checkCoreUpdate(), () => {
+      fetchCore();
+    });
+
   const renderCore = () => (
     <ScrollView style={styles.screen} contentContainerStyle={styles.screenContent}>
-      <ActionCard
-        title="导入核心"
-        desc="选择 LocalCore 核心 SO/ZIP"
-        running={busy === '导入核心'}
-        onPress={() => run('导入核心', pickAnd('导入核心', uri => Backend.importCore(uri)))}
-      />
-      <ActionCard
-        title="从仓库 Release 下载/更新核心"
-        running={busy === '从仓库 Release 下载/更新核心'}
-        onPress={() => run('从仓库 Release 下载/更新核心', () => Backend.checkCoreUpdate())}
-      />
-      <ActionCard
-        title="刷新核心状态"
-        desc="读取 runtime / coreUpdate"
-        running={busy === '查询状态'}
-        onPress={refreshState}
-      />
-      {parsed ? (
-        <View style={styles.statusBox}>
-          <Text style={styles.statusTitle}>runtime</Text>
-          <Text style={styles.statusText} selectable>{JSON.stringify(parsed.runtime ?? null, null, 2)}</Text>
-          <Text style={styles.statusTitle}>coreUpdate</Text>
-          <Text style={styles.statusText} selectable>{JSON.stringify(parsed.coreUpdate ?? null, null, 2)}</Text>
+      <View style={styles.rowBtns}>
+        <TouchableOpacity
+          style={[styles.miniBtn, styles.btnFlex]}
+          disabled={!!busy}
+          onPress={importCore}>
+          <Text>导入核心</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.miniBtn, styles.btnFlex, styles.btnLast]}
+          disabled={!!busy}
+          onPress={updateCore}>
+          <Text>从下载更新</Text>
+        </TouchableOpacity>
+      </View>
+      {coreLoading && coreInfo === null && coreError === null ? (
+        <View style={styles.centerBox}>
+          <ActivityIndicator />
+          <Text style={styles.hint}>正在读取核心…</Text>
         </View>
-      ) : (
-        <Text style={styles.hint}>点「刷新核心状态」查看当前核心 ID 与版本。</Text>
-      )}
+      ) : null}
+      {coreError !== null ? (
+        <TouchableOpacity style={styles.statusBox} onPress={() => fetchCore()}>
+          <Text style={styles.logFail}>加载失败：{coreError}</Text>
+          <Text style={styles.hint}>点我重试</Text>
+        </TouchableOpacity>
+      ) : null}
+      {coreInfo !== null ? (
+        <View style={styles.modelRow}>
+          <View style={styles.modelNameRow}>
+            <Text style={styles.modelName} numberOfLines={1}>
+              {coreInfo.id}
+            </Text>
+            <Text style={styles.tagLoaded}>已激活</Text>
+          </View>
+          <Text style={styles.hint}>版本 {coreInfo.version}</Text>
+        </View>
+      ) : null}
+      {coreInfo === null && coreError === null && !coreLoading ? (
+        <Text style={styles.hint}>暂无已安装核心</Text>
+      ) : null}
     </ScrollView>
   );
 
@@ -546,6 +603,8 @@ const styles = StyleSheet.create({
   tagEye: {fontSize: 15, marginLeft: 6},
   tagLoaded: {fontSize: 12, color: '#1a3faa', marginLeft: 6, fontWeight: '700'},
   rowBtns: {flexDirection: 'row'},
+  btnFlex: {flex: 1, alignItems: 'center'},
+  btnLast: {marginRight: 0},
   miniBtn: {
     paddingHorizontal: 16,
     paddingVertical: 8,
