@@ -213,7 +213,7 @@ public final class RuntimeManager {
         int requestId = request.optInt("requestId");
         Reply reply = new Reply();
         replies.put(requestId, reply);
-        mainHandler.execute(() -> {
+        mainHandler.post(() -> {
             try {
                 current.emit("LocalCoreRuntime", request.toString());
             } catch (RuntimeException error) {

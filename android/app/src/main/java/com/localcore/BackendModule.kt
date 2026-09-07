@@ -1,11 +1,11 @@
-package com.localcore
+﻿package com.localcore
 
 import android.content.Intent
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
-import com.facebook.react.modules.core.DeviceEventManagerModule
+import com.localcore.runtime.RuntimeManager
 import com.localcore.service.BackendService
 
 class BackendModule(private val reactContext: ReactApplicationContext) :
@@ -109,15 +109,15 @@ class BackendModule(private val reactContext: ReactApplicationContext) :
 
   fun emitRuntimeEvent(name: String, payload: String) {
     try {
-      reactContext
-          .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
-          .emit(name, payload)
+      reactContext.emitDeviceEvent(name, payload)
     } catch (error: Exception) {
-      android.util.Log.w("Backend", "JS 运行时事件发送失败: " + error.message)
+      android.util.Log.w("Backend", "JS 杩愯鏃朵簨浠跺彂閫佸け璐? " + error.message)
     }
   }
 
   init {
-    RuntimeManager.sink = { name, payload -> emitRuntimeEvent(name, payload) }
+    RuntimeManager.sink = RuntimeManager.Sink { name, payload -> emitRuntimeEvent(name, payload) }
   }
 }
+
+

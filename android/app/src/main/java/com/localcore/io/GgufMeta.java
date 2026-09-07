@@ -28,10 +28,10 @@ public final class GgufMeta {
             long pairs = readU64(input);
             for (long i = 0; i < pairs; i++) {
                 String key = readString(input);
-                int type = readU32(input);
+                int type = (int) readU32(input);
                 if (CHAT_TEMPLATE.equals(key) && type == TYPE_STRING) return readString(input);
                 if (CHAT_TEMPLATE.equals(key) && type == TYPE_ARRAY) {
-                    int elementType = readU32(input);
+                    int elementType = (int) readU32(input);
                     long count = readU64(input);
                     if (elementType == TYPE_STRING && count > 0) {
                         String first = readString(input);
@@ -54,7 +54,7 @@ public final class GgufMeta {
             case 4: case 5: case 6: skip(input, 4); return;
             case 10: case 11: case 12: skip(input, 8); return;
             case TYPE_STRING: skip(input, readU64(input)); return;
-            case TYPE_ARRAY: skipArray(input, readU32(input), readU64(input)); return;
+            case TYPE_ARRAY: skipArray(input, (int) readU32(input), readU64(input)); return;
             default: throw new IOException("GGUF 值类型未知: " + type);
         }
     }

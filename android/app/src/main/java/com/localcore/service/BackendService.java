@@ -1,4 +1,4 @@
-﻿package com.localcore.service;
+package com.localcore.service;
 
 import android.app.Notification;
 import android.app.NotificationChannel;
@@ -37,7 +37,7 @@ public final class BackendService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
-        graph = ((MainApplication) getApplication()).graph();
+        graph = ((MainApplication) getApplication()).getGraph();
         server = new LocalHttpServer(graph.config, graph.resources, graph.runtime, graph.events);
         createChannel();
         graph.config.addListener(configListener);
@@ -97,9 +97,9 @@ public final class BackendService extends Service {
     }
 
     private void createChannel() {
-        NotificationChannel channel = new NotificationChannel(CHANNEL, "LocalCore 鍚庣",
+        NotificationChannel channel = new NotificationChannel(CHANNEL, "LocalCore backend",
                 NotificationManager.IMPORTANCE_LOW);
-        channel.setDescription("鏈湴 LLM HTTP 鏈嶅姟涓庤祫婧愪换鍔＄姸鎬?);
+        channel.setDescription("LocalCore HTTP backend and resource tasks");
         getSystemService(NotificationManager.class).createNotificationChannel(channel);
     }
 
