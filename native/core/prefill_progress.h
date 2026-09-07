@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdint>
 #include <stdexcept>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -47,6 +48,7 @@ public:
                 throw std::runtime_error("进度回调节点顺序异常");
             }
             self.done = found->second;
+            self.owner.report_nodes(self.phase->name, self.done, self.nodes);
             const double partial = double(self.tokens) * self.done / self.nodes;
             self.owner.publish(*self.phase, self.phase->completed + partial);
             if (self.done == self.nodes) self.phase->completed += self.tokens;
@@ -86,6 +88,7 @@ public:
             const int stride = std::max(1, (nodes + 99) / 100);
             for (int i = stride; i < nodes; i += stride) checkpoints.emplace(compute_nodes[i - 1], i);
             checkpoints.emplace(compute_nodes.back(), nodes);
+            owner.report_nodes(phase->name, 0, nodes);
             owner.publish(*phase, phase->completed, true);
         }
     };
@@ -128,6 +131,15 @@ public:
 
     void preparing(const char * phase) {
         if (active) callback(phase, 0, 0, user_data);
+    }
+
+    // DEBUG visibility: every checkpoint as its own line so the log shows
+    // rolling (1,2,3...) versus jumping straight to the end. Same channel,
+    // "<phase>:nodes" suffix keeps it apart from token-weighted values.
+    void report_nodes(const char * phase, int done, int total) {
+        if (!active || callback == nullptr) return;
+        const std::string name = std::string(phase) + ":nodes";
+        callback(name.c_str(), done, total, user_data);
     }
 
     void select_chunk(bool is_image, int64_t tokens) {
