@@ -1150,7 +1150,9 @@ export default function App() {
         onRequestClose={() => setTplOpen(false)}>
         <Pressable style={styles.tplMask} onPress={() => setTplOpen(false)}>
           <Pressable style={styles.tplCard} onPress={e => e.stopPropagation()}>
-            <Text style={styles.settingsTitle}>模板{tplModel ? ' - ' + tplModel.name : ''}</Text>
+            <Text style={styles.settingsTitle} numberOfLines={1}>
+              模板{tplModel ? ' - ' + tplModel.name : ''}
+            </Text>
             {tplLoading ? (
               <View style={styles.centerBox}>
                 <ActivityIndicator />
@@ -1294,14 +1296,14 @@ const styles = StyleSheet.create({
     includeFontPadding: false,
   },
   tplMask: {flex: 1, backgroundColor: 'rgba(0,0,0,0.3)', alignItems: 'center', justifyContent: 'center'},
-  tplCard: {width: '86%', maxHeight: '80%', backgroundColor: '#ffffff', borderRadius: 12, padding: 16},
+  tplCard: {width: '86%', height: '80%', backgroundColor: '#ffffff', borderRadius: 12, padding: 16},
   tplInput: {
+    flex: 1,
     borderWidth: 1,
     borderColor: '#dddddd',
     borderRadius: 8,
     paddingHorizontal: 10,
     paddingVertical: 8,
-    minHeight: 200,
     marginVertical: 10,
     color: '#111111',
     fontFamily: 'monospace',
