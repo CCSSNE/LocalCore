@@ -315,19 +315,21 @@ export default function App() {
 
   const renderCore = () => (
     <ScrollView style={styles.screen} contentContainerStyle={styles.screenContent}>
-      <View style={styles.rowBtns}>
-        <TouchableOpacity
-          style={[styles.miniBtn, styles.btnFlex]}
-          disabled={!!busy}
-          onPress={importCore}>
-          <Text>导入核心</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.miniBtn, styles.btnFlex, styles.btnLast]}
-          disabled={!!busy}
-          onPress={updateCore}>
-          <Text>从下载更新</Text>
-        </TouchableOpacity>
+      <View style={styles.btnBox}>
+        <View style={styles.rowBtns}>
+          <TouchableOpacity
+            style={[styles.miniBtn, styles.btnFlex]}
+            disabled={!!busy}
+            onPress={importCore}>
+            <Text>导入核心</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.miniBtn, styles.btnFlex, styles.btnLast]}
+            disabled={!!busy}
+            onPress={updateCore}>
+            <Text>从下载更新</Text>
+          </TouchableOpacity>
+        </View>
       </View>
       {coreLoading && coreInfo === null && coreError === null ? (
         <View style={styles.centerBox}>
@@ -597,6 +599,14 @@ const styles = StyleSheet.create({
   rowBtns: {flexDirection: 'row'},
   btnFlex: {flex: 1, alignItems: 'center'},
   btnLast: {marginRight: 0},
+  btnBox: {
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+    borderRadius: 10,
+    padding: 8,
+    marginBottom: 12,
+    backgroundColor: '#ffffff',
+  },
   miniBtn: {
     paddingHorizontal: 16,
     paddingVertical: 8,
