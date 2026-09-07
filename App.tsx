@@ -18,8 +18,9 @@ const {Backend} = NativeModules;
 type RouteKey = 'chat' | 'core' | 'model' | 'backend' | 'log';
 
 // 侧边栏顺序按用户要求：后端在日志上面，日志沉底。
+// 主屏叫测试：无上下文单轮，用完即走，不做复杂功能。
 const ROUTES: Array<{key: RouteKey; title: string}> = [
-  {key: 'chat', title: '聊天'},
+  {key: 'chat', title: '测试'},
   {key: 'core', title: '核心'},
   {key: 'model', title: '模型'},
   {key: 'backend', title: '后端'},
@@ -27,7 +28,7 @@ const ROUTES: Array<{key: RouteKey; title: string}> = [
 ];
 
 const TITLES: Record<RouteKey, string> = {
-  chat: 'LocalCore 聊天',
+  chat: '测试',
   core: '核心管理',
   model: '模型管理',
   backend: '后端服务',
@@ -71,6 +72,7 @@ function parseModels(root: any): ModelEntry[] {
 export default function App() {
   const [route, setRoute] = useState<RouteKey>('chat');
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [chatMenuOpen, setChatMenuOpen] = useState(false);
   const [log, setLog] = useState<LogLine[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMsg[]>([]);
@@ -94,6 +96,7 @@ export default function App() {
   const go = (next: RouteKey) => {
     setRoute(next);
     setDrawerOpen(false);
+    setChatMenuOpen(false);
   };
 
   const run = (label: string, action: () => Promise<any>, afterOk?: () => void) => {
@@ -195,6 +198,26 @@ export default function App() {
   const importModel = () =>
     run('导入模型', pickAnd('导入模型', uri => Backend.importModel(uri)), () => {
       fetchModels();
+    });
+
+  const importCore = () =>
+    run('导入核心', pickAnd('导入核心', uri => Backend.importCore(uri)), () => {
+      fetchCore();
+    });
+
+  const updateCore = () =>
+    run('从仓库 Release 下载/更新核心', () => Backend.checkCoreUpdate(), () => {
+      fetchCore();
+    });
+
+  const startBackend = () =>
+    run('启动后端服务', () => Backend.startService(), () => {
+      fetchBackend();
+    });
+
+  const stopBackend = () =>
+    run('停止后端服务', () => Backend.stopService(), () => {
+      fetchBackend();
     });
 
   const sendChat = () => {
@@ -303,61 +326,51 @@ export default function App() {
     </View>
   );
 
-  const importCore = () =>
-    run('导入核心', pickAnd('导入核心', uri => Backend.importCore(uri)), () => {
-      fetchCore();
-    });
-
-  const updateCore = () =>
-    run('从仓库 Release 下载/更新核心', () => Backend.checkCoreUpdate(), () => {
-      fetchCore();
-    });
-
   const renderCore = () => (
-    <ScrollView style={styles.screen} contentContainerStyle={styles.screenContent}>
-      <View style={styles.btnBox}>
-        <View style={styles.rowBtns}>
-          <TouchableOpacity
-            style={[styles.miniBtn, styles.btnFlex]}
-            disabled={!!busy}
-            onPress={importCore}>
-            <Text>导入核心</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.miniBtn, styles.btnFlex, styles.btnLast]}
-            disabled={!!busy}
-            onPress={updateCore}>
-            <Text>从下载更新</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-      {coreLoading && coreInfo === null && coreError === null ? (
-        <View style={styles.centerBox}>
-          <ActivityIndicator />
-          <Text style={styles.hint}>正在读取核心…</Text>
-        </View>
-      ) : null}
-      {coreError !== null ? (
-        <TouchableOpacity style={styles.statusBox} onPress={() => fetchCore()}>
-          <Text style={styles.logFail}>加载失败：{coreError}</Text>
-          <Text style={styles.hint}>点我重试</Text>
+    <View style={styles.screen}>
+      <View style={styles.actionBar}>
+        <TouchableOpacity
+          style={[styles.btn, styles.btnFlex]}
+          disabled={!!busy}
+          onPress={importCore}>
+          <Text>导入核心</Text>
         </TouchableOpacity>
-      ) : null}
-      {coreInfo !== null ? (
-        <View style={styles.modelRow}>
-          <View style={styles.modelNameRow}>
-            <Text style={styles.modelName} numberOfLines={1}>
-              {coreInfo.id}
-            </Text>
-            <Text style={styles.tagLoaded}>已激活</Text>
+        <TouchableOpacity
+          style={[styles.btn, styles.btnFlex, styles.btnLast]}
+          disabled={!!busy}
+          onPress={updateCore}>
+          <Text>从下载更新</Text>
+        </TouchableOpacity>
+      </View>
+      <ScrollView style={styles.chatList} contentContainerStyle={styles.screenContent}>
+        {coreLoading && coreInfo === null && coreError === null ? (
+          <View style={styles.centerBox}>
+            <ActivityIndicator />
+            <Text style={styles.hint}>正在读取核心…</Text>
           </View>
-          <Text style={styles.hint}>版本 {coreInfo.version}</Text>
-        </View>
-      ) : null}
-      {coreInfo === null && coreError === null && !coreLoading ? (
-        <Text style={styles.hint}>暂无已安装核心</Text>
-      ) : null}
-    </ScrollView>
+        ) : null}
+        {coreError !== null ? (
+          <TouchableOpacity style={styles.card} onPress={() => fetchCore()}>
+            <Text style={styles.logFail}>加载失败：{coreError}</Text>
+            <Text style={styles.hint}>点我重试</Text>
+          </TouchableOpacity>
+        ) : null}
+        {coreInfo !== null ? (
+          <View style={styles.card}>
+            <View style={styles.cardTitleRow}>
+              <Text style={styles.cardTitle} numberOfLines={1}>
+                {coreInfo.id}
+              </Text>
+              <Text style={styles.tagLoaded}>已激活</Text>
+            </View>
+            <Text style={styles.hint}>版本 {coreInfo.version}</Text>
+          </View>
+        ) : null}
+        {coreInfo === null && coreError === null && !coreLoading ? (
+          <Text style={styles.hint}>暂无已安装核心</Text>
+        ) : null}
+      </ScrollView>
+    </View>
   );
 
   const renderModel = () => (
@@ -369,7 +382,7 @@ export default function App() {
         </View>
       ) : null}
       {modelError !== null ? (
-        <TouchableOpacity style={styles.statusBox} onPress={() => fetchModels()}>
+        <TouchableOpacity style={styles.card} onPress={() => fetchModels()}>
           <Text style={styles.logFail}>加载失败：{modelError}</Text>
           <Text style={styles.hint}>点我重试</Text>
         </TouchableOpacity>
@@ -378,9 +391,9 @@ export default function App() {
         <Text style={styles.hint}>暂无已导入模型</Text>
       ) : null}
       {(modelList ?? []).map(model => (
-        <View key={model.id} style={styles.modelRow}>
-          <View style={styles.modelNameRow}>
-            <Text style={styles.modelName} numberOfLines={1}>
+        <View key={model.id} style={styles.card}>
+          <View style={styles.cardTitleRow}>
+            <Text style={styles.cardTitle} numberOfLines={1}>
               {model.name}
             </Text>
             {model.paired ? <Text style={styles.tagEye}>👁</Text> : null}
@@ -388,7 +401,7 @@ export default function App() {
           </View>
           <View style={styles.rowBtns}>
             <TouchableOpacity
-              style={styles.miniBtn}
+              style={styles.btn}
               disabled={!!busy}
               onPress={() =>
                 run('加载模型', () => Backend.loadModel(model.id), () => {
@@ -398,7 +411,7 @@ export default function App() {
               <Text>加载</Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={styles.miniBtn}
+              style={styles.btn}
               disabled={!!busy}
               onPress={() =>
                 run(
@@ -412,7 +425,7 @@ export default function App() {
               <Text>配对</Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={styles.miniBtn}
+              style={[styles.btn, styles.btnLast]}
               disabled={!!busy}
               onPress={() => confirmDelete(model)}>
               <Text>删除</Text>
@@ -424,67 +437,61 @@ export default function App() {
     </ScrollView>
   );
 
-  const startBackend = () =>
-    run('启动后端服务', () => Backend.startService(), () => {
-      fetchBackend();
-    });
-
-  const stopBackend = () =>
-    run('停止后端服务', () => Backend.stopService(), () => {
-      fetchBackend();
-    });
-
   const renderBackend = () => (
-    <ScrollView style={styles.screen} contentContainerStyle={styles.screenContent}>
-      <View style={styles.rowBtns}>
+    <View style={styles.screen}>
+      <View style={styles.actionBar}>
         <TouchableOpacity
-          style={[styles.miniBtn, styles.btnFlex]}
+          style={[styles.btn, styles.btnFlex]}
           disabled={!!busy}
           onPress={startBackend}>
           <Text>启动</Text>
         </TouchableOpacity>
         <TouchableOpacity
-          style={[styles.miniBtn, styles.btnFlex, styles.btnLast]}
+          style={[styles.btn, styles.btnFlex, styles.btnLast]}
           disabled={!!busy}
           onPress={stopBackend}>
           <Text>停止</Text>
         </TouchableOpacity>
       </View>
-      {backendLoading && backendInfo === null && backendError === null ? (
-        <View style={styles.centerBox}>
-          <ActivityIndicator />
-          <Text style={styles.hint}>正在读取后端状态…</Text>
-        </View>
-      ) : null}
-      {backendError !== null ? (
-        <TouchableOpacity style={styles.statusBox} onPress={() => fetchBackend()}>
-          <Text style={styles.logFail}>加载失败：{backendError}</Text>
-          <Text style={styles.hint}>点我重试</Text>
-        </TouchableOpacity>
-      ) : null}
-      {backendInfo !== null ? (
-        <View style={styles.statusBox}>
-          <Text style={styles.statusTitle}>状态：{backendInfo.running ? '运行中' : '未运行'}</Text>
-          <Text style={styles.statusText} selectable>地址：{backendInfo.address ?? '—'}</Text>
-          <Text style={styles.statusText} selectable>错误：{backendInfo.error ?? '无'}</Text>
-        </View>
-      ) : null}
-    </ScrollView>
+      <ScrollView style={styles.chatList} contentContainerStyle={styles.screenContent}>
+        {backendLoading && backendInfo === null && backendError === null ? (
+          <View style={styles.centerBox}>
+            <ActivityIndicator />
+            <Text style={styles.hint}>正在读取后端状态…</Text>
+          </View>
+        ) : null}
+        {backendError !== null ? (
+          <TouchableOpacity style={styles.card} onPress={() => fetchBackend()}>
+            <Text style={styles.logFail}>加载失败：{backendError}</Text>
+            <Text style={styles.hint}>点我重试</Text>
+          </TouchableOpacity>
+        ) : null}
+        {backendInfo !== null ? (
+          <View style={styles.card}>
+            <View style={styles.cardTitleRow}>
+              <Text style={styles.cardTitle}>状态：{backendInfo.running ? '运行中' : '未运行'}</Text>
+            </View>
+            <Text style={styles.cardSub} selectable>地址：{backendInfo.address ?? '—'}</Text>
+            <Text style={styles.cardSub} selectable>错误：{backendInfo.error ?? '无'}</Text>
+          </View>
+        ) : null}
+      </ScrollView>
+    </View>
   );
 
   const renderLog = () => (
     <View style={styles.screen}>
-      <View style={styles.logBar}>
-        <TouchableOpacity style={[styles.smallBtn, styles.logBtn]} onPress={refreshState}>
+      <View style={styles.actionBar}>
+        <TouchableOpacity style={[styles.btn, styles.btnFlex]} onPress={refreshState}>
           <Text>查询</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={[styles.smallBtn, styles.logBtn]} onPress={() => setLog([])}>
+        <TouchableOpacity style={[styles.btn, styles.btnFlex]} onPress={() => setLog([])}>
           <Text>清空</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={[styles.smallBtn, styles.logBtn]} onPress={copyLog}>
+        <TouchableOpacity style={[styles.btn, styles.btnFlex]} onPress={copyLog}>
           <Text>复制</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={[styles.smallBtn, styles.logBtn]} onPress={exportLog}>
+        <TouchableOpacity style={[styles.btn, styles.btnFlex, styles.btnLast]} onPress={exportLog}>
           <Text>导出</Text>
         </TouchableOpacity>
       </View>
@@ -512,6 +519,24 @@ export default function App() {
     </View>
   );
 
+  const renderHeaderRight = () => {
+    if (route === 'chat') {
+      return (
+        <TouchableOpacity onPress={() => setChatMenuOpen(true)} style={styles.iconBtn}>
+          <Text style={styles.iconText}>⋮</Text>
+        </TouchableOpacity>
+      );
+    }
+    if (route === 'model') {
+      return (
+        <TouchableOpacity onPress={importModel} style={styles.headerAction}>
+          <Text style={styles.headerActionText}>导入</Text>
+        </TouchableOpacity>
+      );
+    }
+    return <View style={styles.headerAction} />;
+  };
+
   return (
     <View style={styles.root}>
       <View style={styles.header}>
@@ -519,13 +544,7 @@ export default function App() {
           <Text style={styles.iconText}>＝</Text>
         </TouchableOpacity>
         <Text style={styles.headerTitle}>{TITLES[route]}</Text>
-        {route === 'model' ? (
-          <TouchableOpacity onPress={importModel} style={styles.headerAction}>
-            <Text style={styles.headerActionText}>导入</Text>
-          </TouchableOpacity>
-        ) : (
-          <View style={styles.headerAction} />
-        )}
+        {renderHeaderRight()}
       </View>
 
       {route === 'chat'
@@ -556,6 +575,21 @@ export default function App() {
           </Pressable>
         </Pressable>
       </Modal>
+
+      <Modal visible={chatMenuOpen} transparent animationType="fade" onRequestClose={() => setChatMenuOpen(false)}>
+        <Pressable style={styles.menuMask} onPress={() => setChatMenuOpen(false)}>
+          <Pressable style={styles.menu} onPress={e => e.stopPropagation()}>
+            <TouchableOpacity
+              style={styles.menuItem}
+              onPress={() => {
+                setMessages([]);
+                setChatMenuOpen(false);
+              }}>
+              <Text>清空聊天记录</Text>
+            </TouchableOpacity>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </View>
   );
 }
@@ -581,33 +615,8 @@ const styles = StyleSheet.create({
   screenContent: {padding: 16},
   centerBox: {alignItems: 'center', paddingVertical: 24},
   hint: {fontSize: 13, color: '#666666', lineHeight: 20},
-  statusBox: {marginTop: 8, padding: 12, borderWidth: 1, borderColor: '#e0e0e0', borderRadius: 10},
-  statusTitle: {fontSize: 13, fontWeight: 'bold', color: '#333333', marginTop: 8},
-  statusText: {fontSize: 12, color: '#333333', marginTop: 4},
-  modelRow: {
-    padding: 12,
-    marginBottom: 10,
-    borderWidth: 1,
-    borderColor: '#dddddd',
-    borderRadius: 10,
-    backgroundColor: '#f7f7f7',
-  },
-  modelNameRow: {flexDirection: 'row', alignItems: 'center', marginBottom: 8},
-  modelName: {flex: 1, fontSize: 15, color: '#111111', fontWeight: '600'},
-  tagEye: {fontSize: 15, marginLeft: 6},
-  tagLoaded: {fontSize: 12, color: '#1a3faa', marginLeft: 6, fontWeight: '700'},
-  rowBtns: {flexDirection: 'row'},
-  btnFlex: {flex: 1, alignItems: 'center'},
-  btnLast: {marginRight: 0},
-  btnBox: {
-    borderWidth: 1,
-    borderColor: '#e0e0e0',
-    borderRadius: 10,
-    padding: 8,
-    marginBottom: 12,
-    backgroundColor: '#ffffff',
-  },
-  miniBtn: {
+  actionBar: {flexDirection: 'row', padding: 12, borderBottomWidth: 1, borderBottomColor: '#e5e5e5'},
+  btn: {
     paddingHorizontal: 16,
     paddingVertical: 8,
     borderWidth: 1,
@@ -616,6 +625,22 @@ const styles = StyleSheet.create({
     marginRight: 8,
     backgroundColor: '#ffffff',
   },
+  btnFlex: {flex: 1, alignItems: 'center'},
+  btnLast: {marginRight: 0},
+  card: {
+    padding: 12,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#dddddd',
+    borderRadius: 10,
+    backgroundColor: '#f7f7f7',
+  },
+  cardTitleRow: {flexDirection: 'row', alignItems: 'center', marginBottom: 8},
+  cardTitle: {flex: 1, fontSize: 15, color: '#111111', fontWeight: '600'},
+  cardSub: {fontSize: 12, color: '#333333', marginTop: 4},
+  tagEye: {fontSize: 15, marginLeft: 6},
+  tagLoaded: {fontSize: 12, color: '#1a3faa', marginLeft: 6, fontWeight: '700'},
+  rowBtns: {flexDirection: 'row'},
   chatList: {flex: 1},
   chatListContent: {padding: 16},
   bubble: {padding: 10, borderRadius: 10, marginBottom: 8, maxWidth: '85%', alignSelf: 'flex-start'},
@@ -638,9 +663,6 @@ const styles = StyleSheet.create({
   sendBtn: {marginLeft: 8, backgroundColor: '#2563eb', borderRadius: 18, paddingHorizontal: 16, paddingVertical: 10},
   sendBtnDisabled: {opacity: 0.4},
   sendText: {color: '#ffffff', fontWeight: '600'},
-  logBar: {flexDirection: 'row', padding: 12, borderBottomWidth: 1, borderBottomColor: '#e5e5e5'},
-  smallBtn: {paddingHorizontal: 12, paddingVertical: 8, borderWidth: 1, borderColor: '#dddddd', borderRadius: 8, marginRight: 8},
-  logBtn: {flex: 1, alignItems: 'center', marginRight: 8},
   logList: {flex: 1},
   logText: {fontSize: 13, marginBottom: 4},
   logInfo: {color: '#333333'},
@@ -654,4 +676,7 @@ const styles = StyleSheet.create({
   drawerText: {fontSize: 15, color: '#333333'},
   drawerTextActive: {color: '#1a3faa', fontWeight: '700'},
   drawerFoot: {marginTop: 24, marginLeft: 8, fontSize: 12, color: '#999999'},
+  menuMask: {flex: 1, backgroundColor: 'rgba(0,0,0,0.15)'},
+  menu: {position: 'absolute', top: 92, right: 8, backgroundColor: '#ffffff', borderRadius: 10, borderWidth: 1, borderColor: '#e0e0e0', minWidth: 170, paddingVertical: 6, elevation: 4},
+  menuItem: {paddingVertical: 12, paddingHorizontal: 16},
 });
