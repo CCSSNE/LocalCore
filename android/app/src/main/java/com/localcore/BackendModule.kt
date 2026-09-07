@@ -258,11 +258,23 @@ class BackendModule(private val reactContext: ReactApplicationContext) :
   @ReactMethod
   fun startService(promise: Promise) {
     try {
+      requestNotificationPermissionIfNeeded()
       BackendService.command(reactContext, BackendService.ACTION_START)
       promise.resolve(null)
     } catch (error: Exception) {
       promise.reject("START_FAILED", error.message, error)
     }
+  }
+
+  private fun requestNotificationPermissionIfNeeded() {
+    if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.TIRAMISU) return
+    val activity = reactContext.currentActivity ?: return
+    if (activity.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) ==
+        android.content.pm.PackageManager.PERMISSION_GRANTED) {
+      return
+    }
+    activity.requestPermissions(
+        arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), NOTIFICATION_REQUEST_CODE)
   }
 
   @ReactMethod
@@ -278,5 +290,6 @@ class BackendModule(private val reactContext: ReactApplicationContext) :
   companion object {
     private const val PICK_REQUEST = 4701
     private const val SAVE_REQUEST = 4702
+    private const val NOTIFICATION_REQUEST_CODE = 4801
   }
 }
