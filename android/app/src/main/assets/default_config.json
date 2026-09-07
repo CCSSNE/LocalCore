@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "hostApi": 2,
   "server": {
     "host": "127.0.0.1",
@@ -15,12 +15,10 @@
       "completions": "/v1/completions"
     }
   },
-  "updates": {
-    "enabled": false,
-    "manifestUrl": "",
-    "checkIntervalMinutes": 360,
-    "autoActivate": false,
-    "autoInstall": false
+  "coreUpdates": {
+    "enabled": true,
+    "manifestUrl": "https://github.com/CCSSNE/LocalCore/releases/download/core-stable/core-manifest.json",
+    "checkIntervalMinutes": 360
   },
   "diagnostics": {
     "minimumLevel": "info",
@@ -38,8 +36,8 @@
           {"path": "/server/port", "label": "端口", "control": "number"},
           {"path": "/server/autoStart", "label": "自动启动服务", "control": "toggle"},
           {"path": "/server/apiKey", "label": "Bearer API Key", "control": "text"},
-          {"path": "/updates/enabled", "label": "自动检查更新", "control": "toggle"},
-          {"path": "/updates/manifestUrl", "label": "更新清单 URL", "control": "text"}
+          {"path": "/coreUpdates/enabled", "label": "自动检查核心更新", "control": "toggle"},
+          {"path": "/coreUpdates/manifestUrl", "label": "核心 Release 清单 URL", "control": "text"}
         ]
       }
     ]

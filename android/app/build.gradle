@@ -22,6 +22,11 @@ android {
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
         versionName "1.0.0"
+        externalNativeBuild {
+            cmake {
+                arguments "-DCMAKE_OBJECT_PATH_MAX=250"
+            }
+        }
     }
     buildTypes {
         debug {
@@ -33,10 +38,11 @@ android {
             proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
         }
     }
-    packagingOptions {
-        jniLibs {
-            // 核心本体不内置 APK：librnllama.so 与 CPU 变体在运行时由导入的核心包抢注提供
-            excludes += ["**/librnllama.so", "**/librnllama_v8*.so", "**/librnllama_x86_64.so"]
+    externalNativeBuild {
+        cmake {
+            path file("src/main/cpp/CMakeLists.txt")
+            version "3.22.1"
+            buildStagingDirectory "D:/cxx/LocalCore/loader"
         }
     }
 }

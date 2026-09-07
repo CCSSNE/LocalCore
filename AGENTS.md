@@ -7,9 +7,10 @@
 
 - 本文档中"仓库"一词均包含 GitHub Release：Release 是仓库的一部分。.gitignore 的产物禁令只约束 git 树，Release 允许上传 SO 等成品，允许从 Release 拉取成品。
 - 用户已删除的文件一律视为废纸：不要查看、不要找回、不要引用其内容，也不要恢复。
-- 本项目唯一的动态核心是 llama.rn（npm 官方包及其 GitHub Release）。APP 是真 React Native 应用，推理全能力（Jinja 模板、工具调用、thinking）走 llama.rn 的 JS 接口层。
-- 动态核心以文件形式导入导出，机制是抢注：导入的 librnllama*.so 先用 Runtime.load 注册 SONAME，llama.rn 的 System.loadLibrary 随后命中已注册库。仅当 llama.rn 的加载链（库名/加载方式/SONAME/JSI 接口）变化时才适配并重编 APK；其余更新直接白嫖官方 npm/Release，不重编核心、不维护自建桥。
-- 禁止恢复自建推理桥或自产核心（native_bridge.cpp / llama_jni.cpp / runtime.cpp / 自建 C API）。禁止把核心 SO 内置进 APK。
+- 本项目唯一的推理上游是官方 `ggml-org/llama.cpp` 源码；由本仓库固定上游稳定标签和 commit，在本机直接组装 `liblocalcore_core.so`，并把可复现元数据、ABI、SHA-256 和 Android ABI 变体发布到本仓库 GitHub Release。
+- APK 内只允许内置极薄通用 `liblocalcore_loader.so`：职责严格限定为 `dlopen`、LocalCore ABI 版本核对、`dlsym` 和 JNI 转发。llama.cpp、Jinja/chat 模板、工具调用、thinking、采样和 MTMD 多模态实现全部位于可更新的核心 SO；禁止在 Java/Kotlin/JS 再造第二套推理或模板实现。
+- 动态核心使用稳定 `localcore_core_api.h` C ABI，以文件形式从 Release 更新或由用户导入；核心不得内置进 APK。只要 LocalCore ABI 不变，更新 llama.cpp 和核心 SO 不重编 APK；只有 Loader ABI 变化才同步适配并重编 APK。
+- 禁止恢复 llama.rn、librnllama SONAME 抢注、JS 推理事件桥或把 llama.cpp 直接编进 APK。核心构建只能走 `scripts/build-core.ps1` 的统一入口，APP 推理只能走 `NativeRuntime -> liblocalcore_loader.so -> liblocalcore_core.so`。
 
 
 ## 工作原则
@@ -171,7 +172,17 @@ cmd /c yarn.cmd install --ignore-scripts
 cmd /c npx.cmd patch-package
 ```
 
-`postinstall` 依赖 Bash；Windows 上使用 `--ignore-scripts` 后必须显式运行 `patch-package`，否则仓库中的依赖补丁不会生效。当前默认不从源码编译 `llama.rn`，因此不需要额外拉取 OpenCL headers。
+`postinstall` 依赖 Bash；Windows 上使用 `--ignore-scripts` 后必须显式运行 `patch-package`，否则仓库中的依赖补丁不会生效。项目不依赖 llama.rn；React Native 构建只产生 UI、Java 服务和极薄 Loader。
+
+动态核心本地构建：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\build-core.ps1
+```
+
+- 脚本从官方 `ggml-org/llama.cpp` 拉取固定稳定标签和 commit，分别构建 `arm64-v8a`、`x86_64`，再生成统一 ZIP 与 `core-manifest.json`；不得从浮动 master 或来源不明的预编译库交付核心。
+- 核心产物位于 `.runtime-build\dist\`，只上传到本仓库 `core-stable` Release，不提交进 Git 树。Release 清单是 APP 自动更新的唯一远程数据源；本地导入与远程更新最终必须收敛到同一个 `localcore.core` 资源 ID 和 Loader ABI。
+- 正式交付前必须确认核心 SO 未依赖 Release 包之外的非系统私有 SO，并在目标模拟器上分别完成纯文本与 MMPROJ 图片请求的真实推理。
 
 Android 本地构建：
 

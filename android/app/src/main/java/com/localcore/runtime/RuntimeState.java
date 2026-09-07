@@ -20,4 +20,19 @@ public final class RuntimeState {
     public static RuntimeState empty() {
         return new RuntimeState(Phase.EMPTY, null, null, null, null);
     }
+
+    @Override
+    public String toString() {
+        org.json.JSONObject value = new org.json.JSONObject();
+        try {
+            value.put("phase", phase.name().toLowerCase(java.util.Locale.ROOT));
+            value.put("coreId", coreId == null ? org.json.JSONObject.NULL : coreId);
+            value.put("coreVersion", coreVersion == null ? org.json.JSONObject.NULL : coreVersion);
+            value.put("modelId", modelId == null ? org.json.JSONObject.NULL : modelId);
+            value.put("error", error == null ? org.json.JSONObject.NULL : error);
+            return value.toString();
+        } catch (Exception failure) {
+            throw new IllegalStateException("无法序列化运行时状态", failure);
+        }
+    }
 }

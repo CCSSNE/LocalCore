@@ -45,7 +45,7 @@ public final class BackendService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        startForeground(NOTIFICATION_ID, notification("姝ｅ湪鍚姩"));
+        startForeground(NOTIFICATION_ID, notification("正在启动"));
         String action = intent == null ? null : intent.getAction();
         if (ACTION_STOP.equals(action)) {
             requested = false;
@@ -60,11 +60,11 @@ public final class BackendService extends Service {
         try {
             server.start();
             graph.backend.update(new BackendStatus(true, server.address(), null));
-            notifyState("鏈嶅姟鍦板潃 " + server.address());
+            notifyState("服务地址 " + server.address());
         } catch (Exception error) {
-            graph.events.error("service", "HTTP 鏈嶅姟鍚姩澶辫触", error);
+            graph.events.error("service", "HTTP 服务启动失败", error);
             graph.backend.update(new BackendStatus(false, null, error.getMessage()));
-            notifyState("鍚姩澶辫触: " + error.getMessage());
+            notifyState("启动失败: " + error.getMessage());
         }
         return START_STICKY;
     }
@@ -88,11 +88,11 @@ public final class BackendService extends Service {
         try {
             server.start();
             graph.backend.update(new BackendStatus(true, server.address(), null));
-            notifyState("鏈嶅姟鍦板潃 " + server.address());
+            notifyState("服务地址 " + server.address());
         } catch (Exception error) {
-            graph.events.error("service", "閰嶇疆婵€娲诲悗閲嶆柊鐩戝惉澶辫触", error);
+            graph.events.error("service", "配置激活后重新监听失败", error);
             graph.backend.update(new BackendStatus(false, null, error.getMessage()));
-            notifyState("閲嶅惎澶辫触: " + error.getMessage());
+            notifyState("重启失败: " + error.getMessage());
         }
     }
 

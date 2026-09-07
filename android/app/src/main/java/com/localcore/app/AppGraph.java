@@ -25,7 +25,7 @@ public final class AppGraph {
         events.configure(config.current().optJSONObject("diagnostics"));
         config.addListener(value -> events.configure(value.optJSONObject("diagnostics")));
         resources = new ResourceManager(app, config, events);
-        runtime = new RuntimeManager(config, resources, events);
+        runtime = new RuntimeManager(app, config, resources, events);
         backend = new BackendStatusStore();
         updates = new UpdateManager(config, resources, events);
         exchange = new LocalExchange(app, config, resources, events);

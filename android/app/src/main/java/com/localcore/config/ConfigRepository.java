@@ -43,6 +43,14 @@ public final class ConfigRepository {
                 }
             }
             active = Jsons.readObject(activeFile);
+            int schemaVersion = active.optInt("schemaVersion");
+            if (schemaVersion == 2) {
+                active = migrateV2(active);
+                AtomicFiles.writeUtf8(activeFile, Jsons.format(active));
+                events.info("config", "配置已从 schemaVersion=2 迁移到 3");
+            } else if (schemaVersion != 3) {
+                throw new IllegalStateException("不支持的配置 schemaVersion=" + schemaVersion);
+            }
             events.info("config", "已加载配置 schemaVersion=" + active.optInt("schemaVersion"));
         } catch (Exception error) {
             events.error("config", "有效配置加载失败", error);
@@ -89,5 +97,29 @@ public final class ConfigRepository {
 
     public File activeFile() {
         return activeFile;
+    }
+
+    private JSONObject migrateV2(JSONObject previous) throws Exception {
+        JSONObject defaults;
+        try (InputStream input = context.getAssets().open("default_config.json")) {
+            defaults = Jsons.parseObject(Jsons.readUtf8(input), "内置 schemaVersion=3 配置");
+        }
+        JSONObject migrated = new JSONObject(previous.toString());
+        migrated.put("schemaVersion", 3);
+        migrated.remove("updates");
+        migrated.put("coreUpdates", defaults.getJSONObject("coreUpdates"));
+        migrated.put("management", defaults.getJSONObject("management"));
+        org.json.JSONArray resources = migrated.getJSONArray("resources");
+        org.json.JSONArray retained = new org.json.JSONArray();
+        for (int i = 0; i < resources.length(); i++) {
+            JSONObject resource = resources.getJSONObject(i);
+            if (!"core".equals(resource.optString("type"))) retained.put(resource);
+        }
+        migrated.put("resources", retained);
+        org.json.JSONArray models = migrated.getJSONArray("models");
+        for (int i = 0; i < models.length(); i++) {
+            models.getJSONObject(i).put("core", "localcore.core");
+        }
+        return migrated;
     }
 }

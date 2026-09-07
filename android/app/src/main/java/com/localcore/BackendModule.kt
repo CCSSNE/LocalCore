@@ -9,7 +9,6 @@ import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
-import com.localcore.runtime.RuntimeManager
 import com.localcore.service.BackendService
 
 class BackendModule(private val reactContext: ReactApplicationContext) :
@@ -53,7 +52,6 @@ class BackendModule(private val reactContext: ReactApplicationContext) :
 
   init {
     reactContext.addActivityEventListener(pickListener)
-    RuntimeManager.sink = RuntimeManager.Sink { name, payload -> emitRuntimeEvent(name, payload) }
   }
 
   private fun takePersistable(uri: Uri): String {
@@ -118,12 +116,31 @@ class BackendModule(private val reactContext: ReactApplicationContext) :
   }
 
   @ReactMethod
+  fun importMmproj(uriString: String, modelId: String, promise: Promise) {
+    runAsync(promise, "IMPORT_MMPROJ_FAILED") {
+      application.graph.exchange.importMmproj(Uri.parse(uriString), modelId)
+      null
+    }
+  }
+
+  @ReactMethod
+  fun checkCoreUpdate(promise: Promise) {
+    try {
+      application.graph.updates.checkNow()
+      promise.resolve(null)
+    } catch (error: Exception) {
+      promise.reject("CORE_UPDATE_FAILED", error.message, error)
+    }
+  }
+
+  @ReactMethod
   fun getBackendState(promise: Promise) {
     try {
       val graph = application.graph
       val state = org.json.JSONObject()
-      state.put("backend", graph.backend.current().toString())
-      state.put("runtime", graph.runtime.state().toString())
+      state.put("backend", org.json.JSONObject(graph.backend.current().toString()))
+      state.put("runtime", org.json.JSONObject(graph.runtime.state().toString()))
+      state.put("coreUpdate", org.json.JSONObject(graph.updates.state().toString()))
       state.put("config", graph.config.current())
       promise.resolve(state.toString())
     } catch (error: Exception) {
@@ -148,52 +165,6 @@ class BackendModule(private val reactContext: ReactApplicationContext) :
       promise.resolve(null)
     } catch (error: Exception) {
       promise.reject("STOP_FAILED", error.message, error)
-    }
-  }
-
-  @ReactMethod
-  fun preloadCore(soPath: String, promise: Promise) {
-    // 独立线程执行 System.load，避免与 RN 桥线程互相持锁；
-    // 变体 SO 与通用 librnllama.so 是两个 SONAME，抢注需要两个都注册。
-    Thread {
-      try {
-        android.util.Log.i("Backend", "preload begin: " + soPath)
-        System.load(soPath)
-        android.util.Log.i("Backend", "preload entry loaded")
-        val parent = java.io.File(soPath).parentFile
-        val generic = parent?.listFiles()?.firstOrNull { it.name == "librnllama.so" }
-        if (generic != null && generic.absolutePath != soPath) {
-          System.load(generic.absolutePath)
-          android.util.Log.i("Backend", "preload generic loaded")
-        }
-        android.util.Log.i("Backend", "preload done")
-        promise.resolve(null)
-      } catch (t: Throwable) {
-        android.util.Log.e("Backend", "preload failed", t)
-        promise.reject("PRELOAD_FAILED", t.message, t)
-      }
-    }.start()
-  }
-
-  @ReactMethod
-  fun addListener(eventName: String) {
-  }
-
-  @ReactMethod
-  fun removeListeners(count: Int) {
-  }
-
-  @ReactMethod
-  fun reply(requestId: Double, payload: String) {
-    RuntimeManager.onReply(requestId.toInt(), payload)
-  }
-
-  fun emitRuntimeEvent(name: String, payload: String) {
-    android.util.Log.i("Backend", "emit " + name + " " + payload.take(120))
-    try {
-      reactContext.emitDeviceEvent(name, payload)
-    } catch (error: Exception) {
-      android.util.Log.w("Backend", "JS 运行时事件发送失败: " + error.message)
     }
   }
 

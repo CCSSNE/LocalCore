@@ -1,6 +1,5 @@
-import React, {useEffect, useState} from 'react';
+import React, {useState} from 'react';
 import {NativeModules, ScrollView, Text, TouchableOpacity} from 'react-native';
-import {startRuntimeService} from './RuntimeService';
 
 const {Backend} = NativeModules;
 
@@ -42,23 +41,22 @@ export default function App() {
       .finally(() => setBusy(false));
   };
 
-  useEffect(() => {
-    try {
-      startRuntimeService();
-      push('info', '运行时桥已就绪');
-    } catch (error) {
-      push('fail', '运行时桥启动失败: ' + String(error));
-    }
-  }, []);
-
   const actions: Array<{label: string; run: () => Promise<any>}> = [
     {
-      label: '导入核心（选择 llama-rn-android-jni-libs.tar.gz）',
+      label: '导入核心（选择 LocalCore 核心 SO/ZIP）',
       run: pickAnd('导入核心', uri => Backend.importCore(uri)),
+    },
+    {
+      label: '从仓库 Release 下载/更新核心',
+      run: () => Backend.checkCoreUpdate(),
     },
     {
       label: '导入模型（选择 .gguf）',
       run: pickAnd('导入模型', uri => Backend.importModel(uri)),
+    },
+    {
+      label: '为最新模型导入 MMPROJ（选择 .gguf）',
+      run: pickAnd('导入 MMPROJ', async uri => Backend.importMmproj(uri, await firstModelId())),
     },
     {
       label: '加载最新模型',

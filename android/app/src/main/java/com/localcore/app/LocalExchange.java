@@ -27,6 +27,7 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
 public final class LocalExchange {
+    private static final String CORE_ID = "localcore.core";
     private final Context context;
     private final ConfigRepository config;
     private final ResourceManager resources;
@@ -49,7 +50,7 @@ public final class LocalExchange {
             resources.importResource(descriptor, input);
         }
         JSONObject next = config.current();
-        next.getJSONArray("resources").put(descriptor);
+        upsertResource(next, descriptor);
         next.getJSONArray("models").put(modelEntry(base, modelId, resourceId, currentCoreId()));
         config.activate(next.toString());
         events.info("resource", "本地模型已导入并注册 " + modelId);
@@ -64,8 +65,15 @@ public final class LocalExchange {
             resources.importResource(descriptor, input);
         }
         JSONObject next = config.current();
-        next.getJSONArray("resources").put(descriptor);
-        modelById(next, modelId).put("mmproj", resourceId);
+        upsertResource(next, descriptor);
+        JSONObject model = modelById(next, modelId);
+        model.put("mmproj", resourceId);
+        JSONArray capabilities = model.getJSONArray("capabilities");
+        boolean hasVision = false;
+        for (int i = 0; i < capabilities.length(); i++) {
+            if ("vision".equals(capabilities.optString(i))) hasVision = true;
+        }
+        if (!hasVision) capabilities.put("vision");
         config.activate(next.toString());
         events.info("resource", "多模态投影已配对 " + modelId + " <- " + resourceId);
     }
@@ -73,17 +81,21 @@ public final class LocalExchange {
     public void importCore(Uri uri) throws Exception {
         String name = displayName(uri);
         String base = stripSuffix(stripSuffix(stripSuffix(stripSuffix(name, ".tar.gz"), ".tgz"), ".zip"), ".so");
-        String resourceId = uniqueResourceId("local.core." + sanitize(base));
+        String resourceId = CORE_ID;
         File temp = File.createTempFile("core-import-", ".tmp", context.getFilesDir());
         try {
             copy(uri, temp);
             JSONObject descriptor = descriptor(resourceId, "core");
+            descriptor.put("version", "local-" + sanitize(base));
+            descriptor.put("coreAbi", 1);
             descriptor.put("entry", detectCoreEntry(temp, name));
             try (InputStream input = new FileInputStream(temp)) {
                 resources.importResource(descriptor, input);
             }
             JSONObject next = config.current();
-            next.getJSONArray("resources").put(descriptor);
+            upsertResource(next, descriptor);
+            JSONArray models = next.getJSONArray("models");
+            for (int i = 0; i < models.length(); i++) models.getJSONObject(i).put("core", CORE_ID);
             config.activate(next.toString());
             events.info("resource", "本地核心已导入并注册 " + resourceId);
         } finally {
@@ -109,12 +121,7 @@ public final class LocalExchange {
     }
 
     public String currentCoreId() {
-        JSONArray resources = config.current().optJSONArray("resources");
-        for (int i = 0; i < resources.length(); i++) {
-            JSONObject descriptor = resources.optJSONObject(i);
-            if ("core".equals(descriptor.optString("type"))) return descriptor.optString("id");
-        }
-        return null;
+        return CORE_ID;
     }
 
     private String detectCoreEntry(File file, String name) throws IOException {
@@ -159,40 +166,8 @@ public final class LocalExchange {
 
     private static java.util.List<String> preferredLibraries(String abi) {
         java.util.List<String> result = new java.util.ArrayList<>();
-        if ("arm64-v8a".equals(abi)) {
-            String features = cpuFeatures();
-            boolean fp16 = features.contains("fp16") || features.contains("fphp");
-            boolean dotProd = features.contains("dotprod") || features.contains("asimddp");
-            boolean i8mm = features.contains("i8mm");
-            if (dotProd && i8mm) result.add("librnllama_v8_2_dotprod_i8mm.so");
-            if (dotProd) result.add("librnllama_v8_2_dotprod.so");
-            if (i8mm) result.add("librnllama_v8_2_i8mm.so");
-            if (fp16) result.add("librnllama_v8_2.so");
-            result.add("librnllama_v8.so");
-        } else if ("x86_64".equals(abi)) {
-            result.add("librnllama_x86_64.so");
-        }
-        result.add("librnllama.so");
+        result.add("liblocalcore_core.so");
         return result;
-    }
-
-    private static String cpuFeatures() {
-        StringBuilder features = new StringBuilder();
-        try (java.io.BufferedReader reader = new java.io.BufferedReader(
-                new java.io.FileReader("/proc/cpuinfo"))) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                String lower = line.toLowerCase(java.util.Locale.ROOT);
-                if (lower.startsWith("features") || lower.startsWith("flags")) {
-                    int index = lower.indexOf(':');
-                    if (index != -1 && index + 1 < lower.length()) {
-                        features.append(lower.substring(index + 1).trim()).append(' ');
-                    }
-                }
-            }
-        } catch (IOException ignored) {
-        }
-        return features.toString();
     }
 
     private static void zipDirectory(File directory, ZipOutputStream output) throws IOException {
@@ -235,6 +210,17 @@ public final class LocalExchange {
         model.put("toolCalling", json("enabled", false, "parallel", false, "choice", "none"));
         model.put("capabilities", new JSONArray().put("text").put("streaming"));
         return model;
+    }
+
+    private static void upsertResource(JSONObject target, JSONObject descriptor) throws JSONException {
+        JSONArray resources = target.getJSONArray("resources");
+        JSONArray merged = new JSONArray();
+        for (int i = 0; i < resources.length(); i++) {
+            JSONObject current = resources.getJSONObject(i);
+            if (!descriptor.getString("id").equals(current.optString("id"))) merged.put(current);
+        }
+        merged.put(descriptor);
+        target.put("resources", merged);
     }
 
     private static JSONObject modelById(JSONObject config, String modelId) {
