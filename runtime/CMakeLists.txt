@@ -30,7 +30,7 @@ target_include_directories(localcore_runtime SYSTEM PRIVATE
     "${LLAMA_CPP_SOURCE_DIR}/common"
     "${LLAMA_CPP_SOURCE_DIR}/vendor"
 )
-target_link_libraries(localcore_runtime PRIVATE common llama android log)
+target_link_libraries(localcore_runtime PRIVATE llama-common llama android log)
 set_target_properties(localcore_runtime PROPERTIES
     OUTPUT_NAME "localcore_runtime"
     CXX_VISIBILITY_PRESET hidden
