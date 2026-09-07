@@ -189,6 +189,7 @@ export default function App() {
   const [tplModel, setTplModel] = useState<ModelEntry | null>(null);
   const [tplText, setTplText] = useState('');
   const [tplLoading, setTplLoading] = useState(false);
+  const [stForm, setStForm] = useState<Record<string, string>>({});
   const [coreRt, setCoreRt] = useState<{cuPhase: string | null; cuError: string | null}>({
     cuPhase: null,
     cuError: null,
