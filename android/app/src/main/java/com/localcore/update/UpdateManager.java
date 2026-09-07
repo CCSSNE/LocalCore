@@ -92,7 +92,12 @@ public final class UpdateManager {
             setState(new State(Phase.DISABLED, state.version, null));
             return;
         }
-        long interval = policy.getLong("checkIntervalMinutes");
+        final long interval;
+        try {
+            interval = policy.getLong("checkIntervalMinutes");
+        } catch (org.json.JSONException error) {
+            throw new IllegalStateException("coreUpdates.checkIntervalMinutes 无效", error);
+        }
         scheduled = executor.scheduleWithFixedDelay(this::scheduledCheck, 0, interval, TimeUnit.MINUTES);
         setState(new State(Phase.IDLE, state.version, null));
     }
