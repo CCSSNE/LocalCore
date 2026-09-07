@@ -85,6 +85,14 @@ public final class MainActivity extends Activity {
             requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 20);
         }
         refreshAll();
+        loadConfigIntent(getIntent());
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        loadConfigIntent(intent);
     }
 
     @Override
@@ -328,6 +336,19 @@ public final class MainActivity extends Activity {
                 .addCategory(Intent.CATEGORY_OPENABLE)
                 .setType("application/json");
         startActivityForResult(intent, IMPORT_CONFIG);
+    }
+
+    private void loadConfigIntent(Intent intent) {
+        if (intent == null || !Intent.ACTION_VIEW.equals(intent.getAction()) || intent.getData() == null) return;
+        Uri uri = intent.getData();
+        runAction("打开配置", () -> {
+            try (InputStream input = getContentResolver().openInputStream(uri)) {
+                if (input == null) throw new IllegalStateException("系统未提供配置输入流");
+                configEditor.setText(graph.config.readImport(input));
+                configEditor.requestFocus();
+                toast("外部配置已校验，请检查后原子激活");
+            }
+        });
     }
 
     private void exportConfig() {
