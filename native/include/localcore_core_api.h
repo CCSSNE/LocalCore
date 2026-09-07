@@ -18,8 +18,11 @@ extern "C" {
 
 typedef int (*localcore_token_callback)(const char * utf8, size_t size, void * user_data);
 
-// Progress phases: "image" (image chunks done of total), "context" (prompt tokens done of total).
-// total <= 0 means indeterminate. Additive API: ABI stays 1, old loaders keep using infer.
+// Progress phases: "context" (text prefill), "image" (visual encoding),
+// "image_context" (image embedding prefill). Each is accumulated over this request.
+// .7 reports done/total as token-weighted compute-node completion (basis points),
+// not completed-token counts or elapsed-time estimates. *_prepare has total=0.
+// ABI remains 1: the callback signature and the infer2 symbol are unchanged.
 typedef void (*localcore_progress_callback)(const char * phase, int32_t done, int32_t total, void * user_data);
 
 LOCALCORE_EXPORT uint32_t localcore_core_abi_version(void);

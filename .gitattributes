@@ -1,0 +1,2 @@
+# Unified diffs contain single-space context lines; preserve their bytes on Windows.
+native/patches/*.patch text eol=lf whitespace=-blank-at-eol,-blank-at-eof

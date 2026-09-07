@@ -268,13 +268,14 @@ class BackendModule(private val reactContext: ReactApplicationContext) :
           emitter.emit("LocalCoreChatToken", token)
           true
         },
-        RuntimeManager.StageListener { stage -> emitStage(stage) },
+        RuntimeManager.StageListener { stage -> emitter.emit("LocalCoreChatStage", stage) },
         RuntimeManager.ProgressListener { phase, done, total ->
           // Bridgeless 下 fromJavaArgs 吃不下 LinkedHashMap，必须用 createMap。
           val payload = Arguments.createMap()
           payload.putString("phase", phase)
           payload.putInt("done", done)
           payload.putInt("total", total)
+          android.util.Log.i("LocalCoreProgress", "phase=$phase done=$done total=$total")
           emitter.emit("LocalCoreChatProgress", payload)
         })
     return org.json.JSONObject()

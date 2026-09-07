@@ -1,4 +1,5 @@
 #include "localcore_core_api.h"
+#include "prefill_progress.h"
 
 #include "chat.h"
 #include "common.h"
@@ -41,6 +42,7 @@ struct Engine {
     mtmd_context * vision = nullptr;
     common_chat_templates_ptr templates;
     std::atomic_bool cancelled{false};
+    PrefillProgress progress{cancelled};
     std::mutex operation;
     int32_t batch_size = 512;
 
@@ -60,6 +62,7 @@ struct Engine {
     }
 
     void unload() {
+        progress.stop();
         templates.reset();
         if (vision != nullptr) {
             mtmd_free(vision);
@@ -128,28 +131,27 @@ std::vector<std::string> string_array(const common_json & object, const char * k
     return result;
 }
 
-int evaluate_text(Engine & runtime, const std::string & prompt,
-                    localcore_progress_callback progress, void * progress_data) {
+int evaluate_text(Engine & runtime, const std::string & prompt) {
+    runtime.progress.preparing("context_prepare");
     const llama_vocab * vocab = llama_model_get_vocab(runtime.model);
     std::vector<llama_token> tokens = common_tokenize(vocab, prompt, true, true);
     if (tokens.empty()) throw std::runtime_error("提示词分词结果为空");
+    runtime.progress.context.total = static_cast<int64_t>(tokens.size());
+    runtime.progress.select_chunk(false, tokens.size());
     size_t offset = 0;
     while (offset < tokens.size()) {
         int32_t count = static_cast<int32_t>(std::min<size_t>(runtime.batch_size, tokens.size() - offset));
         llama_batch batch = llama_batch_get_one(tokens.data() + offset, count);
         if (llama_decode(runtime.context, batch) != 0) throw std::runtime_error("llama_decode 提示词失败");
         offset += static_cast<size_t>(count);
-        if (progress != nullptr) {
-            progress("context", static_cast<int32_t>(offset),
-                    static_cast<int32_t>(tokens.size()), progress_data);
-        }
+        runtime.progress.finish_chunk();
     }
     return static_cast<int>(tokens.size());
 }
 
-int evaluate_media(Engine & runtime, const std::string & prompt, const std::vector<std::string> & paths,
-                   localcore_progress_callback progress, void * progress_data) {
+int evaluate_media(Engine & runtime, const std::string & prompt, const std::vector<std::string> & paths) {
     if (runtime.vision == nullptr) throw std::runtime_error("请求包含图片，但当前模型没有加载 MMPROJ");
+    runtime.progress.preparing("image_prepare");
     std::vector<mtmd_bitmap *> bitmaps;
     std::vector<mtmd_helper_video *> videos;
     mtmd_helper_init_opt options = mtmd_helper_init_opt_default();
@@ -170,36 +172,27 @@ int evaluate_media(Engine & runtime, const std::string & prompt, const std::vect
         }
         // Same semantics as mtmd_helper_eval_chunks, unrolled for per-chunk progress.
         size_t chunk_count = mtmd_input_chunks_size(chunks.get());
-        int32_t image_total = 0;
-        int32_t context_total = 0;
         for (size_t i = 0; i < chunk_count; i++) {
             const mtmd_input_chunk * chunk = mtmd_input_chunks_get(chunks.get(), i);
             if (mtmd_input_chunk_get_type(chunk) == MTMD_INPUT_CHUNK_TYPE_TEXT) {
-                context_total += static_cast<int32_t>(mtmd_input_chunk_get_n_tokens(chunk));
+                runtime.progress.context.total += mtmd_input_chunk_get_n_tokens(chunk);
             } else {
-                image_total++;
+                runtime.progress.image.total += mtmd_input_chunk_get_n_tokens(chunk);
             }
         }
-        if (progress != nullptr) progress("image", 0, image_total, progress_data);
+        runtime.progress.image_context.total = runtime.progress.image.total;
         llama_pos position = 0;
-        int32_t image_done = 0;
-        int32_t context_done = 0;
         for (size_t i = 0; i < chunk_count; i++) {
-            if (runtime.cancelled.load(std::memory_order_relaxed)) break;
             const mtmd_input_chunk * chunk = mtmd_input_chunks_get(chunks.get(), i);
+            runtime.progress.select_chunk(mtmd_input_chunk_get_type(chunk) != MTMD_INPUT_CHUNK_TYPE_TEXT,
+                    mtmd_input_chunk_get_n_tokens(chunk));
             bool chunk_logits_last = (i == chunk_count - 1);
             int32_t evaluated = mtmd_helper_eval_chunk_single(runtime.vision, runtime.context, chunk,
                     position, 0, runtime.batch_size, chunk_logits_last, &position);
             if (evaluated != 0) {
                 throw std::runtime_error("MTMD 图片编码或 llama_decode 失败，错误码 " + std::to_string(evaluated));
             }
-            if (mtmd_input_chunk_get_type(chunk) == MTMD_INPUT_CHUNK_TYPE_TEXT) {
-                context_done += static_cast<int32_t>(mtmd_input_chunk_get_n_tokens(chunk));
-                if (progress != nullptr) progress("context", context_done, context_total, progress_data);
-            } else {
-                image_done++;
-                if (progress != nullptr) progress("image", image_done, image_total, progress_data);
-            }
+            runtime.progress.finish_chunk();
         }
         int count = static_cast<int>(mtmd_helper_get_n_tokens(chunks.get()));
         for (mtmd_bitmap * bitmap : bitmaps) mtmd_bitmap_free(bitmap);
@@ -385,6 +378,9 @@ extern "C" LOCALCORE_EXPORT int localcore_core_load_model(
         context_params.n_ubatch = static_cast<uint32_t>(runtime.batch_size);
         context_params.n_threads = int_value(request, "threads", 4);
         context_params.n_threads_batch = context_params.n_threads;
+        context_params.cb_eval_graph = PrefillProgress::Graph::begin;
+        context_params.cb_eval = PrefillProgress::Graph::eval;
+        context_params.cb_eval_user_data = &runtime.progress.llm;
         runtime.context = llama_init_from_model(runtime.model, context_params);
         if (runtime.context == nullptr) throw std::runtime_error("llama.cpp 无法创建推理上下文");
         std::string mmproj_path = string_value(request, "mmprojPath");
@@ -393,6 +389,9 @@ extern "C" LOCALCORE_EXPORT int localcore_core_load_model(
             mtmd_params.use_gpu = false;
             mtmd_params.n_threads = context_params.n_threads;
             mtmd_params.warmup = false;
+            mtmd_params.cb_eval_graph = PrefillProgress::Graph::begin;
+            mtmd_params.cb_eval = PrefillProgress::Graph::eval;
+            mtmd_params.cb_eval_user_data = &runtime.progress.vision;
             runtime.vision = mtmd_init_from_file(mmproj_path.c_str(), runtime.model, mtmd_params);
             if (runtime.vision == nullptr) throw std::runtime_error("MTMD 无法加载 MMPROJ: " + mmproj_path);
             if (!mtmd_support_vision(runtime.vision)) throw std::runtime_error("MMPROJ 不支持图片输入");
@@ -460,9 +459,16 @@ extern "C" LOCALCORE_EXPORT int localcore_core_infer2(
             throw std::invalid_argument("未知推理类型: " + kind);
         }
         std::vector<std::string> media_paths = string_array(request, "mediaPaths");
+        runtime.progress.start(progress_callback, progress_user_data);
+        struct ProgressScope {
+            PrefillProgress & progress;
+            ~ProgressScope() { progress.stop(); }
+        } progress_scope{runtime.progress};
         int prompt_tokens = media_paths.empty()
-                ? evaluate_text(runtime, prompt, progress_callback, progress_user_data)
-                : evaluate_media(runtime, prompt, media_paths, progress_callback, progress_user_data);
+                ? evaluate_text(runtime, prompt)
+                : evaluate_media(runtime, prompt, media_paths);
+        runtime.progress.verify_complete();
+        runtime.progress.stop();
         common_params_sampling params = sampling_params(runtime, request, chat_pointer);
         int completion_tokens = 0;
         bool streamed = false;

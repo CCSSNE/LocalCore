@@ -38,15 +38,6 @@ T symbol(void * library, const char * name) {
     return value;
 }
 
-// Additive symbols (e.g. infer2) are optional: old cores keep working without progress.
-template <typename T>
-T optional_symbol(void * library, const char * name) {
-    dlerror();
-    auto value = reinterpret_cast<T>(dlsym(library, name));
-    dlerror();
-    return value;
-}
-
 struct Core {
     void * library = nullptr;
     void * instance = nullptr;
@@ -169,7 +160,7 @@ Java_com_localcore_runtime_NativeRuntime_nativeOpenCore(JNIEnv * env, jclass, js
         core->load_model = symbol<load_model_fn>(core->library, "localcore_core_load_model");
         core->unload_model = symbol<unload_model_fn>(core->library, "localcore_core_unload_model");
         core->infer = symbol<infer_fn>(core->library, "localcore_core_infer");
-        core->infer2 = optional_symbol<infer2_fn>(core->library, "localcore_core_infer2");
+        core->infer2 = symbol<infer2_fn>(core->library, "localcore_core_infer2");
         core->cancel = symbol<cancel_fn>(core->library, "localcore_core_cancel");
         core->free_string = symbol<free_string_fn>(core->library, "localcore_core_free_string");
         char * error = nullptr;
@@ -260,15 +251,10 @@ Java_com_localcore_runtime_NativeRuntime_nativeInfer2(
         char * result = nullptr;
         char * error = nullptr;
         int code;
-        if (core->infer2 != nullptr) {
-            code = core->infer2(core->instance, json.c_str(),
+        code = core->infer2(core->instance, json.c_str(),
                     token_callback == nullptr ? nullptr : emit_token, &token_state,
                     progress_callback == nullptr ? nullptr : emit_progress, &progress_state,
                     &result, &error);
-        } else {
-            code = core->infer(core->instance, json.c_str(),
-                    token_callback == nullptr ? nullptr : emit_token, &token_state, &result, &error);
-        }
         if (code != 0) {
             if (env->ExceptionCheck()) return nullptr;
             throw std::runtime_error(take(core, error));

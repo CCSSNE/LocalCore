@@ -162,21 +162,8 @@ export default function App() {
   const [viewerData, setViewerData] = useState<{uris: string[]; index: number} | null>(null);
   const [stageMsg, setStageMsg] = useState('');
   const [progressMsg, setProgressMsg] = useState('');
-  const [elapsedSec, setElapsedSec] = useState(0);
-  const elapsedTimer = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  const stopElapsed = () => {
-    if (elapsedTimer.current) {
-      clearInterval(elapsedTimer.current);
-      elapsedTimer.current = null;
-    }
-  };
-
-  const startElapsed = () => {
-    stopElapsed();
-    setElapsedSec(0);
-    elapsedTimer.current = setInterval(() => setElapsedSec(s => s + 1), 1000);
-  };
+  const prefillComplete = useRef(true);
+  const progressStarted = useRef(false);
   const [chatGate, setChatGate] = useState<{loading: boolean; models: number; loaded: boolean}>({
     loading: true,
     models: 0,
@@ -465,7 +452,7 @@ export default function App() {
       const piece = String(token ?? '');
       if (!piece) return;
       setProgressMsg('');
-      stopElapsed();
+      prefillComplete.current = true;
       setMessages(prev => {
         if (prev.length === 0) return prev;
         const last = prev[prev.length - 1];
@@ -478,17 +465,25 @@ export default function App() {
     const stageSub = chatEvents.addListener('LocalCoreChatStage', (text: any) => {
       const s = String(text ?? '');
       if (!s) return;
-      setStageMsg(s);
+      if (!progressStarted.current && !prefillComplete.current) setStageMsg(s);
       push('info', '·· ' + s);
     });
     const progSub = chatEvents.addListener('LocalCoreChatProgress', (event: any) => {
+      if (prefillComplete.current) return;
       const phase = String(event?.phase ?? '');
       if (!phase) return;
       const done = Number(event?.done ?? 0);
       const total = Number(event?.total ?? 0);
-      const pct = total > 0 ? ` ${Math.round((done / total) * 100)}%` : '';
-      const label = phase === 'image' ? '解码图片' : phase === 'context' ? '解码上下文' : phase;
-      const msg = `${label} ${done}/${total}${pct}`;
+      const labels: Record<string, string> = {
+        context_prepare: '正在准备文字',
+        image_prepare: '正在读取和预处理图片',
+        context: '正在解码文字',
+        image: '正在解码图片（视觉编码）',
+        image_context: '正在解码图片（上下文计算）',
+      };
+      const pct = total > 0 ? ` ${((done / total) * 100).toFixed(2)}%` : '';
+      const msg = `${labels[phase] ?? phase}${pct}`;
+      progressStarted.current = true;
       setProgressMsg(msg);
       push('info', '·· ' + msg);
     });
@@ -520,7 +515,6 @@ export default function App() {
     }
     return () => {
       stopPoll();
-      stopElapsed();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [route]);
@@ -612,7 +606,8 @@ export default function App() {
     setMessages(prev => [...prev, {role: 'ai', text: '', live: true}]);
     setStageMsg('');
     setProgressMsg('');
-    startElapsed();
+    prefillComplete.current = false;
+    progressStarted.current = false;
     const label = '聊天推理';
     setBusy(label);
     push('info', '>> ' + label + '：' + prompt + (images.length > 0 ? ` [${images.length}张图片]` : ''));
@@ -639,7 +634,7 @@ export default function App() {
         });
         setStageMsg('');
         setProgressMsg('');
-        stopElapsed();
+        prefillComplete.current = true;
         push('ok', 'OK ' + label + ' => ' + text);
       })
       .catch((error: Error) => {
@@ -653,7 +648,7 @@ export default function App() {
         });
         setStageMsg('');
         setProgressMsg('');
-        stopElapsed();
+        prefillComplete.current = true;
         push('fail', 'FAIL ' + label + ' => ' + error.message);
       })
       .finally(() => setBusy(null));
@@ -806,8 +801,7 @@ export default function App() {
           <View style={[styles.bubble, styles.bubbleAi]}>
             <ActivityIndicator />
             <Text style={styles.bubbleAiText}>
-              {(progressMsg || (stageMsg && stageMsg !== '核心推理开始' ? stageMsg : '正在解码…')) +
-                ` · ${elapsedSec}s`}
+              {progressMsg || (stageMsg && stageMsg !== '核心推理开始' ? stageMsg : '正在准备输入…')}
             </Text>
           </View>
         ) : null}
