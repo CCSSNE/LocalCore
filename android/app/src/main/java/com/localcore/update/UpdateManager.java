@@ -15,10 +15,8 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /** 从仓库 Release 的稳定清单发现核心，合并核心描述符而不覆盖用户模型配置。 */
@@ -55,20 +53,16 @@ public final class UpdateManager {
     private final ConfigRepository config;
     private final ResourceManager resources;
     private final EventLog events;
-    private final ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
+    private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final List<Listener> listeners = new CopyOnWriteArrayList<>();
     private final AtomicBoolean checking = new AtomicBoolean();
-    private ScheduledFuture<?> scheduled;
-    private String scheduledPolicy;
     private volatile State state = new State(Phase.IDLE, null, null);
 
     public UpdateManager(ConfigRepository config, ResourceManager resources, EventLog events) {
         this.config = config;
         this.resources = resources;
         this.events = events;
-        config.addListener(this::schedule);
         resources.addListener(this::onResourceState);
-        schedule(config.current());
     }
 
     public State state() { return state; }
@@ -84,39 +78,6 @@ public final class UpdateManager {
                 events.error("update", "核心更新失败", error);
             } finally { checking.set(false); }
         });
-    }
-
-    private synchronized void schedule(JSONObject configuration) {
-        JSONObject policy = configuration.optJSONObject("coreUpdates");
-        if (policy == null || !policy.optBoolean("enabled")) {
-            if ("disabled".equals(scheduledPolicy)) return;
-            if (scheduled != null) scheduled.cancel(false);
-            scheduled = null;
-            scheduledPolicy = "disabled";
-            setState(new State(Phase.DISABLED, state.version, null));
-            return;
-        }
-        final long interval;
-        try {
-            interval = policy.getLong("checkIntervalMinutes");
-        } catch (org.json.JSONException error) {
-            throw new IllegalStateException("coreUpdates.checkIntervalMinutes 无效", error);
-        }
-        String policyKey = policy.optString("manifestUrl") + "\n" + interval;
-        if (policyKey.equals(scheduledPolicy)) return;
-        if (scheduled != null) scheduled.cancel(false);
-        scheduledPolicy = policyKey;
-        scheduled = executor.scheduleWithFixedDelay(this::scheduledCheck, 0, interval, TimeUnit.MINUTES);
-        setState(new State(Phase.IDLE, state.version, null));
-    }
-
-    private void scheduledCheck() {
-        if (!checking.compareAndSet(false, true)) return;
-        try { discover(); }
-        catch (Exception error) {
-            setState(new State(Phase.FAILED, state.version, error.getMessage()));
-            events.error("update", "定时核心更新失败", error);
-        } finally { checking.set(false); }
     }
 
     private void discover() throws Exception {
