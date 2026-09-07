@@ -1,59 +1,117 @@
 import React, {useEffect, useState} from 'react';
-import {NativeModules, SafeAreaView, Text, View} from 'react-native';
+import {NativeModules, ScrollView, Text, TouchableOpacity} from 'react-native';
 import {startRuntimeService} from './RuntimeService';
 
 const {Backend} = NativeModules;
 
-export default function App() {
-  const [log, setLog] = useState<string[]>([]);
+type LogLine = {kind: 'info' | 'ok' | 'fail'; text: string};
 
-  const push = (line: string) => setLog(prev => [...prev, line]);
-  const run = (label: string, action: () => Promise<any>) => {
-    push('>> ' + label);
-    action()
-      .then((value: any) => push('OK ' + label + (value ? ' => ' + String(value).slice(0, 300) : '')))
-      .catch((error: Error) => push('FAIL ' + label + ' => ' + error.message));
+function pickAnd(pickLabel: string, after: (uri: string) => Promise<any>) {
+  return async () => {
+    try {
+      const uri: string = await Backend.pickFile();
+      return await after(uri);
+    } catch (error: any) {
+      throw new Error(pickLabel + ' 未完成: ' + (error?.message ?? String(error)));
+    }
   };
+}
 
-  const fullRegression = () => {
-    run('导入核心', () => Backend.importCore('/data/data/com.localcore/files/llama-rn-android-jni-libs.tar.gz'));
-    run('导入模型', () => Backend.importModel('/data/data/com.localcore/files/moe_shakespeare15M.gguf'));
-    setTimeout(() => {
-      run('加载模型', async () => {
-        const state = JSON.parse(await Backend.getBackendState());
-        const models = JSON.parse(state.config).models as {id: string}[];
-        if (!models.length) throw new Error('无已导入模型');
-        return Backend.loadModel(models[models.length - 1].id);
-      });
-      setTimeout(() => {
-        run('测试推理', async () => {
-          const state = JSON.parse(await Backend.getBackendState());
-          const models = JSON.parse(state.config).models as {id: string}[];
-          return Backend.testChat(models[models.length - 1].id, '你好');
-        });
-      }, 20000);
-    }, 15000);
+async function firstModelId(): Promise<string> {
+  const state = JSON.parse(await Backend.getBackendState());
+  const models = JSON.parse(state.config).models as {id: string}[];
+  if (!models || models.length === 0) throw new Error('配置中没有模型');
+  return models[models.length - 1].id;
+}
+
+export default function App() {
+  const [log, setLog] = useState<LogLine[]>([]);
+  const [busy, setBusy] = useState(false);
+
+  const push = (kind: LogLine['kind'], text: string) =>
+    setLog(prev => [...prev, {kind, text}]);
+
+  const run = (label: string, action: () => Promise<any>) => {
+    if (busy) return;
+    setBusy(true);
+    push('info', '>> ' + label);
+    action()
+      .then((value: any) =>
+        push('ok', 'OK ' + label + (value ? ' => ' + String(value).slice(0, 400) : '')))
+      .catch((error: Error) => push('fail', 'FAIL ' + label + ' => ' + error.message))
+      .finally(() => setBusy(false));
   };
 
   useEffect(() => {
     try {
       startRuntimeService();
-      push('运行时服务已启动');
+      push('info', '运行时桥已就绪');
     } catch (error) {
-      push('运行时服务启动失败: ' + String(error));
+      push('fail', '运行时桥启动失败: ' + String(error));
     }
   }, []);
 
+  const actions: Array<{label: string; run: () => Promise<any>}> = [
+    {
+      label: '导入核心（选择 llama-rn-android-jni-libs.tar.gz）',
+      run: pickAnd('导入核心', uri => Backend.importCore(uri)),
+    },
+    {
+      label: '导入模型（选择 .gguf）',
+      run: pickAnd('导入模型', uri => Backend.importModel(uri)),
+    },
+    {
+      label: '加载最新模型',
+      run: async () => {
+        const id = await firstModelId();
+        return Backend.loadModel(id);
+      },
+    },
+    {
+      label: '测试推理（你好）',
+      run: async () => {
+        const id = await firstModelId();
+        return Backend.testChat(id, '你好');
+      },
+    },
+    {
+      label: '查询状态',
+      run: () => Backend.getBackendState(),
+    },
+    {
+      label: '启动后端服务',
+      run: () => Backend.startService(),
+    },
+    {
+      label: '停止后端服务',
+      run: () => Backend.stopService(),
+    },
+  ];
+
   return (
-    <SafeAreaView>
-      <View>
-        <Text>LocalCore 回归台</Text>
-        <Text onPress={fullRegression}>一键回归</Text>
-        <Text onPress={() => run('查询状态', () => Backend.getBackendState())}>查询状态</Text>
-        {log.map((line, index) => (
-          <Text key={index}>{line}</Text>
-        ))}
-      </View>
-    </SafeAreaView>
+    <ScrollView style={{padding: 16, paddingTop: 40, flex: 1}}>
+      <Text style={{fontSize: 20, fontWeight: 'bold', marginBottom: 12}}>LocalCore 控制台</Text>
+      {actions.map(action => (
+        <TouchableOpacity
+          key={action.label}
+          onPress={() => run(action.label, action.run)}
+          style={{
+            padding: 12,
+            marginBottom: 8,
+            borderWidth: 1,
+            borderRadius: 6,
+          }}>
+          <Text>{action.label}</Text>
+        </TouchableOpacity>
+      ))}
+      <Text style={{fontSize: 16, fontWeight: 'bold', marginTop: 8, marginBottom: 4}}>日志</Text>
+      {log.map((line, index) => (
+        <Text
+          key={index}
+          style={{color: line.kind === 'fail' ? '#c00' : line.kind === 'ok' ? '#070' : '#333'}}>
+          {line.text}
+        </Text>
+      ))}
+    </ScrollView>
   );
 }
