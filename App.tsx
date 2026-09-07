@@ -16,8 +16,8 @@ export default function App() {
   };
 
   const fullRegression = () => {
-    run('导入核心', () => Backend.importCore('/sdcard/Android/data/com.localcore/files/llama-rn-android-jni-libs.tar.gz'));
-    run('导入模型', () => Backend.importModel('/sdcard/Android/data/com.localcore/files/moe_shakespeare15M.gguf'));
+    run('导入核心', () => Backend.importCore('/data/data/com.localcore/files/llama-rn-android-jni-libs.tar.gz'));
+    run('导入模型', () => Backend.importModel('/data/data/com.localcore/files/moe_shakespeare15M.gguf'));
     setTimeout(() => {
       run('加载模型', async () => {
         const state = JSON.parse(await Backend.getBackendState());
