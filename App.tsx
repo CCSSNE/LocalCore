@@ -710,28 +710,67 @@ export default function App() {
     ]);
   };
 
-  const openTemplate = (model: ModelEntry) => {
+  const openModelSettings = (model: ModelEntry) => {
     setTplModel(model);
     setTplText('');
+    setStForm({});
     setTplLoading(true);
     setTplOpen(true);
-    Backend.getModelTemplate(model.id)
-      .then((text: any) => {
+    Promise.all([Backend.getModelSettings(model.id), Backend.getModelTemplate(model.id)])
+      .then(([settings, text]: any[]) => {
+        const root = JSON.parse(String(settings ?? '{}'));
+        const form: Record<string, string> = {};
+        for (const field of NUM_FIELDS) {
+          const value = root?.[field.group]?.[field.key];
+          form[field.key] = value === undefined || value === null ? '' : String(value);
+        }
+        const stop = root?.inference?.stop;
+        form.stop = Array.isArray(stop) ? stop.join(',') : '';
+        setStForm(form);
         setTplText(String(text ?? ''));
         setTplLoading(false);
       })
       .catch((e: any) => {
         setTplLoading(false);
-        push('fail', 'FAIL 读取模板 => ' + (e?.message ?? String(e)));
+        push('fail', 'FAIL 读取模型设置 => ' + (e?.message ?? String(e)));
       });
   };
 
-  const saveTemplate = () => {
+  const saveModelSettings = () => {
     if (!tplModel) return;
     const id = tplModel.id;
-    run('保存模板', () => Backend.setModelTemplate(id, tplText), () => {
-      setTplOpen(false);
-    });
+    const load: Record<string, number> = {};
+    const inference: Record<string, any> = {};
+    for (const field of NUM_FIELDS) {
+      const raw = (stForm[field.key] ?? '').trim();
+      const value = Number(raw);
+      if (raw === '' || !Number.isFinite(value)) {
+        push('fail', `FAIL 保存设置 => ${field.label}必须是数字`);
+        return;
+      }
+      if (field.int && !Number.isInteger(value)) {
+        push('fail', `FAIL 保存设置 => ${field.label}必须是整数`);
+        return;
+      }
+      if (field.group === 'load') load[field.key] = value;
+      else inference[field.key] = value;
+    }
+    inference.stop = stForm.stop
+      .split(',')
+      .map(s => s.trim())
+      .filter(s => s.length > 0);
+    const text = tplText;
+    run(
+      '保存设置',
+      async () => {
+        await Backend.setModelSettings(id, JSON.stringify(load), JSON.stringify(inference));
+        await Backend.setModelTemplate(id, text);
+      },
+      () => {
+        setTplOpen(false);
+        fetchModels();
+      },
+    );
   };
 
   const confirmDelete = (model: ModelEntry) => {
@@ -1076,7 +1115,7 @@ export default function App() {
             <TouchableOpacity
               style={[styles.btn, styles.btnLast]}
               disabled={!!busy}
-              onPress={() => openTemplate(model)}>
+              onPress={() => openModelSettings(model)}>
               <Text>模板</Text>
             </TouchableOpacity>
           </View>
@@ -1250,27 +1289,50 @@ export default function App() {
         <Pressable style={styles.tplMask} onPress={() => setTplOpen(false)}>
           <Pressable style={styles.tplCard} onPress={e => e.stopPropagation()}>
             <Text style={styles.settingsTitle} numberOfLines={1}>
-              模板{tplModel ? ' - ' + tplModel.name : ''}
+              设置{tplModel ? ' - ' + tplModel.name : ''}
             </Text>
+            <Text style={styles.hint}>加载项下次加载生效；推理项下次请求生效</Text>
             {tplLoading ? (
               <View style={styles.centerBox}>
                 <ActivityIndicator />
-                <Text style={styles.hint}>正在读取模板…</Text>
+                <Text style={styles.hint}>正在读取设置…</Text>
               </View>
             ) : (
-              <TextInput
-                value={tplText}
-                onChangeText={setTplText}
-                multiline
-                placeholderTextColor="#999999"
-                style={styles.tplInput}
-              />
+              <ScrollView style={styles.tplScroll}>
+                {NUM_FIELDS.map(field => (
+                  <View key={field.key}>
+                    <Text style={styles.hint}>{field.label}</Text>
+                    <TextInput
+                      value={stForm[field.key] ?? ''}
+                      onChangeText={v => setStForm(prev => ({...prev, [field.key]: v}))}
+                      keyboardType="numeric"
+                      placeholderTextColor="#999999"
+                      style={styles.settingsInput}
+                    />
+                  </View>
+                ))}
+                <Text style={styles.hint}>停止词（逗号分隔）</Text>
+                <TextInput
+                  value={stForm.stop ?? ''}
+                  onChangeText={v => setStForm(prev => ({...prev, stop: v}))}
+                  placeholderTextColor="#999999"
+                  style={styles.settingsInput}
+                />
+                <Text style={styles.hint}>聊天模板</Text>
+                <TextInput
+                  value={tplText}
+                  onChangeText={setTplText}
+                  multiline
+                  placeholderTextColor="#999999"
+                  style={styles.tplInput}
+                />
+              </ScrollView>
             )}
             <View style={styles.rowBtns}>
               <TouchableOpacity
                 style={[styles.btn, styles.btnFlex, styles.btnLast]}
                 disabled={tplLoading || !!busy}
-                onPress={saveTemplate}>
+                onPress={saveModelSettings}>
                 <Text>保存</Text>
               </TouchableOpacity>
             </View>
@@ -1396,13 +1458,14 @@ const styles = StyleSheet.create({
   },
   tplMask: {flex: 1, backgroundColor: 'rgba(0,0,0,0.3)', alignItems: 'center', justifyContent: 'center'},
   tplCard: {width: '86%', height: '80%', backgroundColor: '#ffffff', borderRadius: 12, padding: 16},
+  tplScroll: {flex: 1},
   tplInput: {
-    flex: 1,
     borderWidth: 1,
     borderColor: '#dddddd',
     borderRadius: 8,
     paddingHorizontal: 10,
     paddingVertical: 8,
+    minHeight: 220,
     marginVertical: 10,
     color: '#111111',
     fontFamily: 'monospace',
