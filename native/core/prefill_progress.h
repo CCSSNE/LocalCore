@@ -22,6 +22,7 @@ public:
         int64_t total = 0;
         int64_t completed = 0;
         int32_t last_value = -1;
+        int64_t elapsed_ms = 0;
     };
 
     struct Graph {
@@ -102,10 +103,13 @@ public:
     bool image_chunk = false;
     int64_t chunk_tokens = 0;
 
-    void start(localcore_progress_callback callback, void * user_data) {
+    void start(localcore_progress_callback callback, void * user_data,
+               localcore_progress_callback2 callback2, void * user_data2) {
         this->callback = callback;
         this->user_data = user_data;
-        active = callback != nullptr;
+        this->callback2 = callback2;
+        this->user_data2 = user_data2;
+        active = callback != nullptr || callback2 != nullptr;
         context = {"context"};
         image = {"image"};
         image_context = {"image_context"};
@@ -121,13 +125,16 @@ public:
         active = false;
         callback = nullptr;
         user_data = nullptr;
+        callback2 = nullptr;
+        user_data2 = nullptr;
         llm.phase = vision.phase = nullptr;
         llm.checkpoints.clear();
         vision.checkpoints.clear();
     }
 
     void preparing(const char * phase) {
-        if (active) callback(phase, 0, 0, user_data);
+        if (active && callback != nullptr) callback(phase, 0, 0, user_data);
+        if (active && callback2 != nullptr) callback2(phase, 0, 0, 0, user_data2);
     }
 
     void select_chunk(bool is_image, int64_t tokens) {
@@ -160,8 +167,11 @@ private:
     std::atomic_bool & cancelled;
     localcore_progress_callback callback = nullptr;
     void * user_data = nullptr;
+    localcore_progress_callback2 callback2 = nullptr;
+    void * user_data2 = nullptr;
     Phase * current = nullptr;
     std::chrono::steady_clock::time_point last_report;
+    std::chrono::steady_clock::time_point phase_since;
 
     void finish(Phase & phase) {
         if (phase.total > 0 && phase.completed == phase.total && phase.last_value != 10000) {
@@ -175,9 +185,21 @@ private:
         const auto now = std::chrono::steady_clock::now();
         const bool switched = current != &phase;
         if (!switched && !force && (value == phase.last_value || now - last_report < std::chrono::milliseconds(80))) return;
-        current = &phase;
+        if (switched && current != nullptr) {
+            current->elapsed_ms += std::chrono::duration_cast<std::chrono::milliseconds>(now - phase_since).count();
+        }
+        if (switched) {
+            current = &phase;
+            phase_since = now;
+        }
         phase.last_value = value;
         last_report = now;
-        callback(phase.name, value, 10000, user_data);
+        if (callback != nullptr) callback(phase.name, value, 10000, user_data);
+        if (callback2 != nullptr) {
+            const int64_t elapsed = phase.elapsed_ms
+                    + std::chrono::duration_cast<std::chrono::milliseconds>(now - phase_since).count();
+            callback2(phase.name, static_cast<int32_t>(std::llround(completed)),
+                    static_cast<int32_t>(phase.total), elapsed, user_data2);
+        }
     }
 };

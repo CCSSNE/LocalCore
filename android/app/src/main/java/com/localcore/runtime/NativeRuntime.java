@@ -25,6 +25,10 @@ public final class NativeRuntime implements AutoCloseable {
         void onProgress(String phase, int done, int total);
     }
 
+    public interface Progress2Consumer {
+        void onProgress(String phase, int doneTokens, int totalTokens, long elapsedMs);
+    }
+
     public synchronized String infer(String requestJson, RuntimeManager.TokenConsumer consumer) {
         return nativeInfer(requireHandle(), requestJson, consumer);
     }
@@ -32,6 +36,11 @@ public final class NativeRuntime implements AutoCloseable {
     public synchronized String infer2(String requestJson, RuntimeManager.TokenConsumer tokenConsumer,
                                       ProgressConsumer progressConsumer) {
         return nativeInfer2(requireHandle(), requestJson, tokenConsumer, progressConsumer);
+    }
+
+    public synchronized String infer3(String requestJson, RuntimeManager.TokenConsumer tokenConsumer,
+                                      Progress2Consumer progressConsumer) {
+        return nativeInfer3(requireHandle(), requestJson, tokenConsumer, progressConsumer);
     }
 
     public synchronized void unloadModel() {
@@ -62,6 +71,8 @@ public final class NativeRuntime implements AutoCloseable {
     private static native String nativeInfer(long handle, String requestJson, RuntimeManager.TokenConsumer consumer);
     private static native String nativeInfer2(long handle, String requestJson,
             RuntimeManager.TokenConsumer tokenConsumer, ProgressConsumer progressConsumer);
+    private static native String nativeInfer3(long handle, String requestJson,
+            RuntimeManager.TokenConsumer tokenConsumer, Progress2Consumer progressConsumer);
     private static native void nativeUnloadModel(long handle);
     private static native void nativeCancel(long handle);
     private static native void nativeCloseCore(long handle);

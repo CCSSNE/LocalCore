@@ -36,6 +36,10 @@ public final class RuntimeManager {
         void onProgress(String phase, int done, int total);
     }
 
+    public interface Progress2Listener {
+        void onProgress(String phase, int doneTokens, int totalTokens, long elapsedMs);
+    }
+
     public static final class Result {
         public final int promptTokens;
         public final int completionTokens;
@@ -148,13 +152,18 @@ public final class RuntimeManager {
 
     public Result chat(JSONArray messages, JSONObject request, TokenConsumer consumer, StageListener stages,
                        ProgressListener progress) {
+        return chat(messages, request, consumer, stages, progress, null);
+    }
+
+    public Result chat(JSONArray messages, JSONObject request, TokenConsumer consumer, StageListener stages,
+                       ProgressListener progress, Progress2Listener progress2) {
         stage(stages, "媒体解析开始(" + messages.length() + "条消息)");
         try (MediaResolver.Prepared prepared = media.prepare(messages)) {
             stage(stages, "媒体解析完成(" + prepared.paths.length() + "个媒体文件)");
             JSONObject body = new JSONObject(request.toString());
             body.put("messages", prepared.messages);
             body.put("mediaPaths", prepared.paths);
-            return runInference("chat", body, consumer, stages, progress);
+            return runInference("chat", body, consumer, stages, progress, progress2);
         } catch (Exception error) {
             throw asRuntime(error);
         }
@@ -170,10 +179,15 @@ public final class RuntimeManager {
 
     public Result complete(String prompt, JSONObject request, TokenConsumer consumer, StageListener stages,
                            ProgressListener progress) {
+        return complete(prompt, request, consumer, stages, progress, null);
+    }
+
+    public Result complete(String prompt, JSONObject request, TokenConsumer consumer, StageListener stages,
+                           ProgressListener progress, Progress2Listener progress2) {
         try {
             JSONObject body = new JSONObject(request.toString());
             body.put("prompt", prompt);
-            return runInference("complete", body, consumer, stages, progress);
+            return runInference("complete", body, consumer, stages, progress, progress2);
         } catch (Exception error) {
             throw asRuntime(error);
         }
@@ -192,7 +206,7 @@ public final class RuntimeManager {
     }
 
     private Result runInference(String kind, JSONObject body, TokenConsumer consumer, StageListener stages,
-                                ProgressListener progress) {
+                                ProgressListener progress, Progress2Listener progress2) {
         inference.lock();
         final long startedAt = System.currentTimeMillis();
         final long[] firstTokenAt = {0};
@@ -203,8 +217,9 @@ public final class RuntimeManager {
             }
             return consumer.onToken(token);
         };
-        final NativeRuntime.ProgressConsumer forwarding = progress == null ? null :
-                (phase, done, total) -> progress.onProgress(phase, done, total);
+        final NativeRuntime.Progress2Consumer forwarding2 = progress2 == null ? null :
+                (phase, doneTokens, totalTokens, elapsedMs) ->
+                        progress2.onProgress(phase, doneTokens, totalTokens, elapsedMs);
         try {
             if (loadedModelId == null) throw new IllegalStateException("尚未加载模型");
             RuntimeState before = state();
@@ -212,7 +227,7 @@ public final class RuntimeManager {
                     before.coreId, before.coreVersion, loadedModelId, null));
             body.put("type", kind);
             stage(stages, "核心推理开始");
-            JSONObject response = new JSONObject(nativeRuntime.infer2(body.toString(), timed, forwarding));
+            JSONObject response = new JSONObject(nativeRuntime.infer3(body.toString(), timed, forwarding2));
             stage(stages, "核心推理结束");
             setState(new RuntimeState(RuntimeState.Phase.MODEL_READY,
                     before.coreId, before.coreVersion, loadedModelId, null));

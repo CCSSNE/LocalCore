@@ -427,6 +427,11 @@ extern "C" LOCALCORE_EXPORT int localcore_core_unload_model(void * instance, cha
     }
 }
 
+static int infer_impl(void * instance, const char * request_json, localcore_token_callback token_callback,
+        void * token_user_data, localcore_progress_callback progress_callback,
+        void * progress_user_data, localcore_progress_callback2 progress_callback2,
+        void * progress_user_data2, char ** result_json, char ** error);
+
 extern "C" LOCALCORE_EXPORT int localcore_core_infer(
         void * instance, const char * request_json, localcore_token_callback callback,
         void * user_data, char ** result_json, char ** error) {
@@ -438,6 +443,22 @@ extern "C" LOCALCORE_EXPORT int localcore_core_infer2(
         void * instance, const char * request_json, localcore_token_callback token_callback,
         void * token_user_data, localcore_progress_callback progress_callback,
         void * progress_user_data, char ** result_json, char ** error) {
+    return infer_impl(instance, request_json, token_callback, token_user_data,
+            progress_callback, progress_user_data, nullptr, nullptr, result_json, error);
+}
+
+extern "C" LOCALCORE_EXPORT int localcore_core_infer3(
+        void * instance, const char * request_json, localcore_token_callback token_callback,
+        void * token_user_data, localcore_progress_callback2 progress_callback,
+        void * progress_user_data, char ** result_json, char ** error) {
+    return infer_impl(instance, request_json, token_callback, token_user_data,
+            nullptr, nullptr, progress_callback, progress_user_data, result_json, error);
+}
+
+static int infer_impl(void * instance, const char * request_json, localcore_token_callback token_callback,
+        void * token_user_data, localcore_progress_callback progress_callback,
+        void * progress_user_data, localcore_progress_callback2 progress_callback2,
+        void * progress_user_data2, char ** result_json, char ** error) {
     try {
         Engine & runtime = engine(instance);
         std::lock_guard<std::mutex> lock(runtime.operation);
@@ -459,7 +480,7 @@ extern "C" LOCALCORE_EXPORT int localcore_core_infer2(
             throw std::invalid_argument("未知推理类型: " + kind);
         }
         std::vector<std::string> media_paths = string_array(request, "mediaPaths");
-        runtime.progress.start(progress_callback, progress_user_data);
+        runtime.progress.start(progress_callback, progress_user_data, progress_callback2, progress_user_data2);
         struct ProgressScope {
             PrefillProgress & progress;
             ~ProgressScope() { progress.stop(); }

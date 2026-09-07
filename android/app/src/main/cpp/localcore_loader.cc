@@ -23,6 +23,10 @@ using unload_model_fn = int (*)(void *, char **);
 using infer_fn = int (*)(void *, const char *, localcore_token_callback, void *, char **, char **);
 using infer2_fn = int (*)(void *, const char *, localcore_token_callback, void *,
         localcore_progress_callback, void *, char **, char **);
+using infer3_fn = int (*)(void *, const char *, localcore_token_callback, void *,
+        localcore_progress_callback2, void *, char **, char **);
+using infer3_fn = int (*)(void *, const char *, localcore_token_callback, void *,
+        localcore_progress_callback, void *, localcore_progress_callback2, void *, char **, char **);
 using cancel_fn = void (*)(void *);
 using free_string_fn = void (*)(char *);
 
@@ -38,6 +42,15 @@ T symbol(void * library, const char * name) {
     return value;
 }
 
+// Additive symbols may be absent on older cores; callers fall back explicitly.
+template <typename T>
+T optional_symbol(void * library, const char * name) {
+    dlerror();
+    auto value = reinterpret_cast<T>(dlsym(library, name));
+    dlerror();
+    return value;
+}
+
 struct Core {
     void * library = nullptr;
     void * instance = nullptr;
@@ -47,6 +60,7 @@ struct Core {
     unload_model_fn unload_model = nullptr;
     infer_fn infer = nullptr;
     infer2_fn infer2 = nullptr;
+    infer3_fn infer3 = nullptr;
     cancel_fn cancel = nullptr;
     free_string_fn free_string = nullptr;
     std::mutex operation;
@@ -130,6 +144,21 @@ void emit_progress(const char * phase, int32_t done, int32_t total, void * opaqu
     state->env->DeleteLocalRef(name);
 }
 
+struct ProgressState2 {
+    JNIEnv * env;
+    jobject callback;
+    jmethodID method;
+};
+
+void emit_progress2(const char * phase, int32_t done, int32_t total, int64_t elapsed_ms, void * opaque) {
+    auto * state = static_cast<ProgressState2 *>(opaque);
+    if (state == nullptr || state->callback == nullptr) return;
+    jstring name = java_string(state->env, phase, strlen(phase));
+    if (name == nullptr) return;
+    state->env->CallVoidMethod(state->callback, state->method, name, done, total, elapsed_ms);
+    state->env->DeleteLocalRef(name);
+}
+
 std::string take(Core * core, char * value) {
     if (value == nullptr) return {};
     std::string result(value);
@@ -161,6 +190,8 @@ Java_com_localcore_runtime_NativeRuntime_nativeOpenCore(JNIEnv * env, jclass, js
         core->unload_model = symbol<unload_model_fn>(core->library, "localcore_core_unload_model");
         core->infer = symbol<infer_fn>(core->library, "localcore_core_infer");
         core->infer2 = symbol<infer2_fn>(core->library, "localcore_core_infer2");
+        core->infer3 = optional_symbol<infer3_fn>(core->library, "localcore_core_infer3");
+        core->infer3 = symbol<infer3_fn>(core->library, "localcore_core_infer3");
         core->cancel = symbol<cancel_fn>(core->library, "localcore_core_cancel");
         core->free_string = symbol<free_string_fn>(core->library, "localcore_core_free_string");
         char * error = nullptr;
@@ -267,9 +298,55 @@ Java_com_localcore_runtime_NativeRuntime_nativeInfer2(
     }
 }
 
-extern "C" JNIEXPORT void JNICALL
-Java_com_localcore_runtime_NativeRuntime_nativeUnloadModel(JNIEnv * env, jclass, jlong handle) {
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_localcore_runtime_NativeRuntime_nativeInfer3(
+        JNIEnv * env, jclass, jlong handle, jstring request, jobject token_callback, jobject progress_callback) {
     try {
+        Core * core = from(handle);
+        std::lock_guard<std::mutex> lock(core->operation);
+        std::string json = utf8(env, request);
+        CallbackState token_state{env, token_callback, nullptr};
+        if (token_callback != nullptr) {
+            jclass type = env->GetObjectClass(token_callback);
+            token_state.method = env->GetMethodID(type, "onToken", "(Ljava/lang/String;)Z");
+            env->DeleteLocalRef(type);
+            if (token_state.method == nullptr) throw std::runtime_error("TokenConsumer.onToken 方法不存在");
+        }
+        ProgressState2 progress_state{env, progress_callback, nullptr};
+        if (progress_callback != nullptr) {
+            jclass type = env->GetObjectClass(progress_callback);
+            progress_state.method = env->GetMethodID(type, "onProgress", "(Ljava/lang/String;IIJ)V");
+            env->DeleteLocalRef(type);
+            if (progress_state.method == nullptr) throw std::runtime_error("ProgressConsumer.onProgress 方法不存在");
+        }
+        char * result = nullptr;
+        char * error = nullptr;
+        int code;
+        if (core->infer3 != nullptr) {
+            code = core->infer3(core->instance, json.c_str(),
+                    token_callback == nullptr ? nullptr : emit_token, &token_state,
+                    progress_callback == nullptr ? nullptr : emit_progress2, &progress_state,
+                    &result, &error);
+        } else {
+            // Old core without v2 progress: plain infer, no progress events at all.
+            code = core->infer(core->instance, json.c_str(),
+                    token_callback == nullptr ? nullptr : emit_token, &token_state,
+                    &result, &error);
+        }
+        if (code != 0) {
+            if (env->ExceptionCheck()) return nullptr;
+            throw std::runtime_error(take(core, error));
+        }
+        std::string output = take(core, result);
+        return java_string(env, output.data(), output.size());
+    } catch (const std::exception & error) {
+        if (!env->ExceptionCheck()) throw_java(env, error.what());
+        return nullptr;
+    }
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_localcore_runtime_NativeRuntime_nativeUnloadModel(JNIEnv * env, jclass, jlong handle) {    try {
         Core * core = from(handle);
         std::lock_guard<std::mutex> lock(core->operation);
         char * error = nullptr;
