@@ -149,12 +149,26 @@ class BackendModule(private val reactContext: ReactApplicationContext) :
 
   @ReactMethod
   fun preloadCore(soPath: String, promise: Promise) {
-    try {
-      System.load(soPath)
-      promise.resolve(null)
-    } catch (error: Throwable) {
-      promise.reject("PRELOAD_FAILED", error.message, error)
-    }
+    // 独立线程执行 System.load，避免与 RN 桥线程互相持锁；
+    // 变体 SO 与通用 librnllama.so 是两个 SONAME，抢注需要两个都注册。
+    Thread {
+      try {
+        android.util.Log.i("Backend", "preload begin: " + soPath)
+        System.load(soPath)
+        android.util.Log.i("Backend", "preload entry loaded")
+        val parent = java.io.File(soPath).parentFile
+        val generic = parent?.listFiles()?.firstOrNull { it.name == "librnllama.so" }
+        if (generic != null && generic.absolutePath != soPath) {
+          System.load(generic.absolutePath)
+          android.util.Log.i("Backend", "preload generic loaded")
+        }
+        android.util.Log.i("Backend", "preload done")
+        promise.resolve(null)
+      } catch (t: Throwable) {
+        android.util.Log.e("Backend", "preload failed", t)
+        promise.reject("PRELOAD_FAILED", t.message, t)
+      }
+    }.start()
   }
 
   @ReactMethod

@@ -89,8 +89,10 @@ export default function App() {
   ];
 
   return (
-    <ScrollView style={{padding: 16, paddingTop: 40, flex: 1}}>
-      <Text style={{fontSize: 20, fontWeight: 'bold', marginBottom: 12}}>LocalCore 控制台</Text>
+    <ScrollView style={{flex: 1, backgroundColor: '#ffffff', padding: 16, paddingTop: 40}}>
+      <Text style={{fontSize: 20, fontWeight: 'bold', marginBottom: 12, color: '#111111'}}>
+        LocalCore 控制台
+      </Text>
       {actions.map(action => (
         <TouchableOpacity
           key={action.label}
@@ -99,16 +101,20 @@ export default function App() {
             padding: 12,
             marginBottom: 8,
             borderWidth: 1,
+            borderColor: '#cccccc',
             borderRadius: 6,
+            backgroundColor: '#f7f7f7',
           }}>
-          <Text>{action.label}</Text>
+          <Text style={{color: '#111111'}}>{action.label}</Text>
         </TouchableOpacity>
       ))}
-      <Text style={{fontSize: 16, fontWeight: 'bold', marginTop: 8, marginBottom: 4}}>日志</Text>
+      <Text style={{fontSize: 16, fontWeight: 'bold', marginTop: 8, marginBottom: 4, color: '#111111'}}>
+        日志
+      </Text>
       {log.map((line, index) => (
         <Text
           key={index}
-          style={{color: line.kind === 'fail' ? '#c00' : line.kind === 'ok' ? '#070' : '#333'}}>
+          style={{color: line.kind === 'fail' ? '#b00020' : line.kind === 'ok' ? '#1b5e20' : '#333333'}}>
           {line.text}
         </Text>
       ))}
