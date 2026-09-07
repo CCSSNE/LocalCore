@@ -80,6 +80,14 @@ function ImageIcon() {
   );
 }
 
+function EyeIcon() {
+  return (
+    <View style={styles.eyeOuter}>
+      <View style={styles.eyePupil} />
+    </View>
+  );
+}
+
 export default function App() {
   const [route, setRoute] = useState<RouteKey>('chat');
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -439,7 +447,7 @@ export default function App() {
             <Text style={styles.cardTitle} numberOfLines={1}>
               {model.name}
             </Text>
-            {model.paired ? <Text style={styles.tagEye}>👁</Text> : null}
+            {model.paired ? <EyeIcon /> : null}
             {loadedId === model.id ? <Text style={styles.tagLoaded}>已加载</Text> : null}
           </View>
           <View style={styles.rowBtns}>
@@ -712,8 +720,24 @@ const styles = StyleSheet.create({
   cardTitleRow: {flexDirection: 'row', alignItems: 'center', marginBottom: 8},
   cardTitle: {flex: 1, fontSize: 15, color: '#111111', fontWeight: '600'},
   cardSub: {fontSize: 12, color: '#333333', marginTop: 4},
-  tagEye: {fontSize: 15, marginLeft: 6},
   tagLoaded: {fontSize: 12, color: '#1a3faa', marginLeft: 6, fontWeight: '700'},
+  eyeOuter: {
+    width: 26,
+    height: 16,
+    borderRadius: 8,
+    borderWidth: 1.5,
+    borderColor: '#666666',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 6,
+  },
+  eyePupil: {
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
+    borderWidth: 1.5,
+    borderColor: '#666666',
+  },
   rowBtns: {flexDirection: 'row'},
   chatList: {flex: 1},
   chatListContent: {padding: 16},
