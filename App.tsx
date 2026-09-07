@@ -155,6 +155,7 @@ export default function App() {
   const [pendingImage, setPendingImage] = useState<string | null>(null);
   const [viewerUri, setViewerUri] = useState<string | null>(null);
   const [stageMsg, setStageMsg] = useState('');
+  const [progressMsg, setProgressMsg] = useState('');
   const [chatGate, setChatGate] = useState<{loading: boolean; models: number; loaded: boolean}>({
     loading: true,
     models: 0,
@@ -417,6 +418,7 @@ export default function App() {
     const sub = chatEvents.addListener('LocalCoreChatToken', (token: any) => {
       const piece = String(token ?? '');
       if (!piece) return;
+      setProgressMsg('');
       setMessages(prev => {
         if (prev.length === 0) return prev;
         const last = prev[prev.length - 1];
@@ -432,9 +434,21 @@ export default function App() {
       setStageMsg(s);
       push('info', '·· ' + s);
     });
+    const progSub = chatEvents.addListener('LocalCoreChatProgress', (event: any) => {
+      const phase = String(event?.phase ?? '');
+      if (!phase) return;
+      const done = Number(event?.done ?? 0);
+      const total = Number(event?.total ?? 0);
+      const pct = total > 0 ? ` ${Math.round((done / total) * 100)}%` : '';
+      const label = phase === 'image' ? '解码图片' : phase === 'context' ? '解码上下文' : phase;
+      const msg = `${label} ${done}/${total}${pct}`;
+      setProgressMsg(msg);
+      push('info', '·· ' + msg);
+    });
     return () => {
       sub.remove();
       stageSub.remove();
+      progSub.remove();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -506,6 +520,7 @@ export default function App() {
     setMessages(prev => [...prev, {role: 'user', text: prompt, imageUri: image}]);
     setMessages(prev => [...prev, {role: 'ai', text: '', live: true}]);
     setStageMsg('');
+    setProgressMsg('');
     const label = '聊天推理';
     setBusy(label);
     push('info', '>> ' + label + '：' + prompt + (image ? ' [图片]' : ''));
@@ -532,6 +547,7 @@ export default function App() {
         });
         if (image) setPendingImage(null);
         setStageMsg('');
+        setProgressMsg('');
         push('ok', 'OK ' + label + ' => ' + text);
       })
       .catch((error: Error) => {
@@ -544,6 +560,7 @@ export default function App() {
           return next;
         });
         setStageMsg('');
+        setProgressMsg('');
         push('fail', 'FAIL ' + label + ' => ' + error.message);
       })
       .finally(() => setBusy(null));
@@ -641,7 +658,7 @@ export default function App() {
         {typing ? (
           <View style={[styles.bubble, styles.bubbleAi]}>
             <ActivityIndicator />
-            <Text style={styles.bubbleAiText}>{stageMsg || '正在推理…'}</Text>
+            <Text style={styles.bubbleAiText}>{progressMsg || stageMsg || '正在推理…'}</Text>
           </View>
         ) : null}
       </ScrollView>
