@@ -70,6 +70,16 @@ function parseModels(root: any): ModelEntry[] {
   }));
 }
 
+function ImageIcon() {
+  return (
+    <View style={styles.imgIcon}>
+      <View style={styles.imgSun} />
+      <View style={styles.imgPeakLeft} />
+      <View style={styles.imgPeakRight} />
+    </View>
+  );
+}
+
 export default function App() {
   const [route, setRoute] = useState<RouteKey>('chat');
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -339,7 +349,7 @@ export default function App() {
       ) : null}
       <View style={styles.inputBar}>
         <TouchableOpacity onPress={pickImage} disabled={!!busy} style={styles.iconBtn}>
-          <Text style={styles.iconText}>🖼️</Text>
+          <ImageIcon />
         </TouchableOpacity>
         <TextInput
           style={styles.input}
@@ -642,6 +652,37 @@ const styles = StyleSheet.create({
   headerTitle: {fontSize: 17, fontWeight: 'bold', color: '#111111'},
   iconBtn: {width: 44, height: 44, alignItems: 'center', justifyContent: 'center'},
   iconText: {fontSize: 22, color: '#111111'},
+  imgIcon: {width: 26, height: 22, borderWidth: 1.5, borderColor: '#666666', borderRadius: 4},
+  imgSun: {
+    position: 'absolute',
+    top: 3,
+    left: 4,
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+    borderWidth: 1.2,
+    borderColor: '#666666',
+  },
+  imgPeakLeft: {
+    position: 'absolute',
+    left: 2,
+    bottom: 3,
+    width: 10,
+    height: 2,
+    borderRadius: 1,
+    backgroundColor: '#666666',
+    transform: [{rotate: '35deg'}],
+  },
+  imgPeakRight: {
+    position: 'absolute',
+    right: 2,
+    bottom: 3,
+    width: 10,
+    height: 2,
+    borderRadius: 1,
+    backgroundColor: '#666666',
+    transform: [{rotate: '-35deg'}],
+  },
   headerAction: {minWidth: 44, height: 44, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 8},
   headerActionText: {fontSize: 15, color: '#1a3faa'},
   screen: {flex: 1, backgroundColor: '#ffffff'},
@@ -704,6 +745,7 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     maxHeight: 110,
     color: '#111111',
+    textAlignVertical: 'center',
   },
   sendBtn: {marginLeft: 8, backgroundColor: '#2563eb', borderRadius: 18, paddingHorizontal: 16, paddingVertical: 10},
   sendBtnDisabled: {opacity: 0.4},
