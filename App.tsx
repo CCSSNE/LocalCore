@@ -15,9 +15,11 @@ import {
   View,
 } from 'react-native';
 import ImageView from 'react-native-image-viewing';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const {Backend} = NativeModules;
 const chatEvents = new NativeEventEmitter(NativeModules.Backend);
+const CHAT_KEY = 'localcore.chat.v1';
 
 type RouteKey = 'chat' | 'core' | 'model' | 'backend' | 'log';
 
@@ -302,6 +304,42 @@ export default function App() {
       setBackendLoading(false);
     }
   };
+
+  useEffect(() => {
+    AsyncStorage.getItem(CHAT_KEY)
+      .then(raw => {
+        if (raw == null) return;
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed)) throw new Error('聊天记录格式无效');
+        const clean: ChatMsg[] = [];
+        for (const item of parsed) {
+          if (item == null || (item.role !== 'user' && item.role !== 'ai' && item.role !== 'error')) continue;
+          const msg: ChatMsg = {role: item.role, text: String(item.text ?? '')};
+          if (typeof item.imageUri === 'string' && item.imageUri) msg.imageUri = item.imageUri;
+          if (item.role === 'ai' && item.stats != null && typeof item.stats === 'object') {
+            msg.stats = {
+              inT: Number(item.stats.inT ?? 0),
+              out: Number(item.stats.out ?? 0),
+              ttft: Number(item.stats.ttft ?? 0),
+              llm: Number(item.stats.llm ?? 0),
+            };
+          }
+          if (msg.role === 'ai' && msg.text === '' && !msg.stats) continue;
+          clean.push(msg);
+        }
+        setMessages(clean);
+      })
+      .catch((e: any) => push('fail', 'FAIL 恢复聊天记录 => ' + (e?.message ?? String(e))));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (messages.some(m => m.live)) return;
+    AsyncStorage.setItem(CHAT_KEY, JSON.stringify(messages)).catch((e: any) =>
+      push('fail', 'FAIL 保存聊天记录 => ' + (e?.message ?? String(e))),
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages]);
 
   useEffect(() => {
     const sub = chatEvents.addListener('LocalCoreChatToken', (token: any) => {
