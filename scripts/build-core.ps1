@@ -14,9 +14,12 @@ $toolchain = Join-Path $ndk 'build\cmake\android.toolchain.cmake'
 
 if (-not (Test-Path (Join-Path $llamaDir '.git'))) {
     git clone --filter=blob:none --no-checkout https://github.com/ggml-org/llama.cpp.git $llamaDir
+    if ($LASTEXITCODE -ne 0) { throw 'llama.cpp clone failed' }
 }
 git -C $llamaDir fetch --depth 1 origin "refs/tags/$LlamaTag`:refs/tags/$LlamaTag"
+if ($LASTEXITCODE -ne 0) { throw 'llama.cpp fetch failed' }
 git -C $llamaDir checkout --detach $LlamaTag
+if ($LASTEXITCODE -ne 0) { throw 'llama.cpp checkout failed' }
 $commit = (git -C $llamaDir rev-parse HEAD).Trim()
 
 New-Item -ItemType Directory -Force $buildRoot, $distRoot | Out-Null
@@ -35,10 +38,12 @@ foreach ($abi in $Abis) {
         "-DLOCALCORE_LLAMA_VERSION=$LlamaTag-$commit" `
         '-DLOCALCORE_CORE_ABI_VERSION=1' `
         '-DCMAKE_BUILD_TYPE=Release'
+    if ($LASTEXITCODE -ne 0) { throw "CMake configure failed for $abi" }
     cmake --build $buildDir --target localcore_core --parallel
+    if ($LASTEXITCODE -ne 0) { throw "Core build failed for $abi" }
     $library = Get-ChildItem -Path $buildDir -Filter 'liblocalcore_core.so*' -Recurse -File |
         Where-Object { $_.Name -eq 'liblocalcore_core.so' } | Select-Object -First 1
-    if ($null -eq $library) { throw "找不到 $abi 的 liblocalcore_core.so" }
+    if ($null -eq $library) { throw "liblocalcore_core.so not found for $abi" }
     $target = Join-Path $packageRoot "jniLibs\$abi"
     New-Item -ItemType Directory -Force $target | Out-Null
     Copy-Item -LiteralPath $library.FullName -Destination (Join-Path $target 'liblocalcore_core.so')

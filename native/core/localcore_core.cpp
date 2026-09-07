@@ -214,7 +214,8 @@ common_chat_params format_chat(Engine & runtime, const common_json & request) {
     return common_chat_templates_apply(runtime.templates.get(), inputs);
 }
 
-common_params_sampling sampling_params(const common_json & request, const common_chat_params * chat) {
+common_params_sampling sampling_params(Engine & runtime, const common_json & request,
+                                       const common_chat_params * chat) {
     common_params_sampling params;
     params.seed = static_cast<uint32_t>(int_value(request, "seed", LLAMA_DEFAULT_SEED));
     params.top_k = int_value(request, "top_k", 40);
@@ -227,8 +228,21 @@ common_params_sampling sampling_params(const common_json & request, const common
     if (chat != nullptr && !chat->grammar.empty()) {
         params.grammar = {COMMON_GRAMMAR_TYPE_TOOL_CALLS, chat->grammar};
         params.grammar_lazy = chat->grammar_lazy;
-        params.grammar_triggers = chat->grammar_triggers;
-        params.preserved_tokens = chat->preserved_tokens;
+        const llama_vocab * vocab = llama_model_get_vocab(runtime.model);
+        for (const std::string & value : chat->preserved_tokens) {
+            std::vector<llama_token> ids = common_tokenize(vocab, value, false, true);
+            if (ids.size() == 1) params.preserved_tokens.insert(ids[0]);
+        }
+        for (common_grammar_trigger trigger : chat->grammar_triggers) {
+            if (trigger.type == COMMON_GRAMMAR_TRIGGER_TYPE_WORD) {
+                std::vector<llama_token> ids = common_tokenize(vocab, trigger.value, false, true);
+                if (ids.size() == 1) {
+                    trigger.type = COMMON_GRAMMAR_TRIGGER_TYPE_TOKEN;
+                    trigger.token = ids[0];
+                }
+            }
+            params.grammar_triggers.push_back(std::move(trigger));
+        }
         params.generation_prompt = chat->generation_prompt;
     } else {
         std::string grammar = string_value(request, "grammar");
@@ -401,7 +415,7 @@ extern "C" LOCALCORE_EXPORT int localcore_core_infer(
         std::vector<std::string> media_paths = string_array(request, "mediaPaths");
         int prompt_tokens = media_paths.empty()
                 ? evaluate_text(runtime, prompt) : evaluate_media(runtime, prompt, media_paths);
-        common_params_sampling params = sampling_params(request, chat_pointer);
+        common_params_sampling params = sampling_params(runtime, request, chat_pointer);
         int completion_tokens = 0;
         std::string text = generate(runtime, params,
                 int_value(request, "max_tokens", 1024), string_array(request, "stop"), completion_tokens);
