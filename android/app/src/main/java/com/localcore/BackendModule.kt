@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import com.facebook.react.bridge.ActivityEventListener
+import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.BaseActivityEventListener
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReadableArray
@@ -269,8 +270,12 @@ class BackendModule(private val reactContext: ReactApplicationContext) :
         },
         RuntimeManager.StageListener { stage -> emitStage(stage) },
         RuntimeManager.ProgressListener { phase, done, total ->
-          emitter.emit("LocalCoreChatProgress",
-              mapOf("phase" to phase, "done" to done, "total" to total))
+          // Bridgeless 下 fromJavaArgs 吃不下 LinkedHashMap，必须用 createMap。
+          val payload = Arguments.createMap()
+          payload.putString("phase", phase)
+          payload.putInt("done", done)
+          payload.putInt("total", total)
+          emitter.emit("LocalCoreChatProgress", payload)
         })
     return org.json.JSONObject()
         .put("text", result.text)
