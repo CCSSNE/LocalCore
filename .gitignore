@@ -12,5 +12,4 @@ node_modules/
 *.aab
 *.hprof
 .runtime-build/
-.localcore-packages/
 
