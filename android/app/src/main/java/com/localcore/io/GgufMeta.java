@@ -10,7 +10,8 @@ import java.nio.charset.StandardCharsets;
 
 public final class GgufMeta {
     private static final String CHAT_TEMPLATE = "tokenizer.chat_template";
-    private static final String CONTEXT_LENGTH = "llama.context_length";
+    private static final String GENERAL_ARCHITECTURE = "general.architecture";
+    private static final String LEGACY_CONTEXT_LENGTH = "llama.context_length";
     private static final int TYPE_STRING = 8;
     private static final int TYPE_ARRAY = 9;
 
@@ -48,7 +49,8 @@ public final class GgufMeta {
         }
     }
 
-    // 读不到或不是整数标量时返回 -1，由调用方决定回退值。
+    // 先找 {arch}.context_length（现代规范），再找 llama.context_length（老规范）。
+    // 都没有或不是整数标量时返回 -1，由调用方决定回退值。
     public static long contextLength(File file) throws IOException {
         try (DataInputStream input = new DataInputStream(new BufferedInputStream(new FileInputStream(file), 1 << 16))) {
             byte[] magic = new byte[4];
@@ -59,17 +61,56 @@ public final class GgufMeta {
             readU32(input);
             readU64(input);
             long pairs = readU64(input);
+            String architecture = null;
+            Long archContext = null;
+            Long legacyContext = null;
             for (long i = 0; i < pairs; i++) {
                 String key = readString(input);
                 int type = (int) readU32(input);
-                if (!CONTEXT_LENGTH.equals(key)) {
+                if (GENERAL_ARCHITECTURE.equals(key) && type == TYPE_STRING) {
+                    architecture = readString(input);
+                    continue;
+                }
+                if (key.endsWith(".context_length")) {
+                    Long value = readIntValue(input, type);
+                    if (value != null) {
+                        if (LEGACY_CONTEXT_LENGTH.equals(key)) legacyContext = value;
+                        else archContext = value;
+                    }
+                    continue;
+                }
+                skipValue(input, type);
+            }
+            if (architecture != null && archContext == null) {
+                Long retry = readArchContext(file, architecture);
+                if (retry != null) archContext = retry;
+            }
+            if (archContext != null) return archContext;
+            if (legacyContext != null) return legacyContext;
+            return -1;
+        }
+    }
+
+    // 架构键可能出现在 general.architecture 之后，扫第二遍兜底。只读文件头，不碰权重。
+    private static Long readArchContext(File file, String architecture) throws IOException {
+        String wanted = architecture + ".context_length";
+        try (DataInputStream input = new DataInputStream(new BufferedInputStream(new FileInputStream(file), 1 << 16))) {
+            byte[] magic = new byte[4];
+            input.readFully(magic);
+            if (magic[0] != 'G' || magic[1] != 'G' || magic[2] != 'U' || magic[3] != 'F') return null;
+            readU32(input);
+            readU64(input);
+            long pairs = readU64(input);
+            for (long i = 0; i < pairs; i++) {
+                String key = readString(input);
+                int type = (int) readU32(input);
+                if (!wanted.equals(key)) {
                     skipValue(input, type);
                     continue;
                 }
-                Long value = readIntValue(input, type);
-                return value == null ? -1 : value;
+                return readIntValue(input, type);
             }
-            return -1;
+            return null;
         }
     }
 
