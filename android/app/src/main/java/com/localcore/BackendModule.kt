@@ -126,7 +126,18 @@ class BackendModule(private val reactContext: ReactApplicationContext) :
   @ReactMethod
   fun importModel(uriString: String, promise: Promise) {
     runAsync(promise, "IMPORT_MODEL_FAILED") {
-      application.graph.exchange.importModel(Uri.parse(uriString))
+      val outcome = application.graph.exchange.importModel(Uri.parse(uriString))
+      try {
+        if (org.json.JSONObject(outcome).optBoolean("contextFallback", false)) {
+          val activity = reactContext.currentActivity
+          activity?.runOnUiThread {
+            android.widget.Toast.makeText(reactContext,
+                "模型未声明上下文长度，已回退 200k", android.widget.Toast.LENGTH_LONG).show()
+          }
+        }
+      } catch (ignored: Exception) {
+      }
+      outcome
     }
   }
 

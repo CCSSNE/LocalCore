@@ -56,7 +56,7 @@ public final class LocalExchange {
         JSONObject next = config.current();
         upsertResource(next, descriptor);
         long ggufContext;
-        String contextNote;
+        boolean contextFallback = false;
         try {
             ggufContext = GgufMeta.contextLength(resources.installedFile(resourceId));
         } catch (Exception error) {
@@ -64,17 +64,19 @@ public final class LocalExchange {
             events.error("resource", "读取模型上下文长度失败", error);
         }
         if (ggufContext <= 0) {
-            ggufContext = Integer.MAX_VALUE;
-            contextNote = "模型未声明上下文，已回退无限制，显存不足会在加载时直接报错";
+            ggufContext = 200000;
+            contextFallback = true;
             events.error("resource", "模型未声明上下文长度(llama.context_length 缺失): " + name,
                     new IllegalStateException("llama.context_length 缺失"));
-        } else {
-            contextNote = "上下文 " + ggufContext;
         }
         next.getJSONArray("models").put(modelEntry(base, modelId, resourceId, currentCoreId(), ggufContext));
         config.activate(next.toString());
-        events.info("resource", "本地模型已导入并注册 " + modelId + " " + contextNote);
-        return modelId + "（" + contextNote + "）";
+        events.info("resource", "本地模型已导入并注册 " + modelId + " 上下文 " + ggufContext);
+        JSONObject outcome = new JSONObject();
+        outcome.put("modelId", modelId);
+        outcome.put("contextSize", ggufContext);
+        outcome.put("contextFallback", contextFallback);
+        return outcome.toString();
     }
 
     public String downloadHfModel(String requestText) throws Exception {
