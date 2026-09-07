@@ -41,7 +41,7 @@ const TITLES: Record<RouteKey, string> = {
 
 type LogLine = {kind: 'info' | 'ok' | 'fail'; text: string};
 type ChatMsg = {role: 'user' | 'ai' | 'error'; text: string; imageUri?: string | null; live?: boolean; stats?: TurnStats};
-type TurnStats = {inT: number; cached: number; out: number; ttft: number; llm: number};
+type TurnStats = {inT: number; out: number; ttft: number; llm: number};
 
 // 单轮统计算式照搬 legadoC AiUsageFormat：千分位 + t，时长 ms/s/m，速度 t/s，单耗 ms/t。
 function fmtCount(n: number): string {
@@ -74,7 +74,7 @@ function StatsStrip({stats}: {stats: TurnStats}) {
   const [open, setOpen] = useState(false);
   const head = `total-${fmtCount(stats.inT + stats.out)} ${fmtSpeed(stats.out, stats.llm)} ${fmtDur(stats.ttft)}`;
   const body =
-    `in-${fmtCount(stats.inT)} c-${fmtCount(stats.cached)} ${fmtSpeed(stats.inT, stats.ttft)} ${fmtMsPerTok(stats.ttft, stats.inT)} ${fmtDur(stats.ttft)}` +
+    `in-${fmtCount(stats.inT)} ${fmtSpeed(stats.inT, stats.ttft)} ${fmtMsPerTok(stats.ttft, stats.inT)} ${fmtDur(stats.ttft)}` +
     `\nout-${fmtCount(stats.out)} ${fmtSpeed(stats.out, stats.llm)} ${fmtMsPerTok(stats.llm, stats.out)} ${fmtDur(stats.llm)}` +
     `\ntotal-${fmtCount(stats.inT + stats.out)}`;
   return (
@@ -389,7 +389,6 @@ export default function App() {
         const text = String(result?.text ?? '');
         const stats: TurnStats = {
           inT: Number(result?.promptTokens ?? 0),
-          cached: 0,
           out: Number(result?.completionTokens ?? 0),
           ttft: Number(result?.ttftMs ?? 0),
           llm: Number(result?.llmMs ?? 0),
