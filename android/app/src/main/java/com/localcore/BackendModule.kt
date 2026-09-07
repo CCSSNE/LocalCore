@@ -144,6 +144,40 @@ class BackendModule(private val reactContext: ReactApplicationContext) :
   }
 
   @ReactMethod
+  fun testChatWithImage(modelId: String, prompt: String, imageUriString: String, promise: Promise) {
+    runAsync(promise, "CHAT_FAILED") {
+      // MediaResolver 只接受 data:base64 或 URL 能直接打开的地址，content:// 必须先落到缓存文件再转 file://。
+      val imageFile = copyUriToCache(android.net.Uri.parse(imageUriString))
+      try {
+        val content = org.json.JSONArray()
+            .put(org.json.JSONObject().put("type", "text").put("text", prompt))
+            .put(org.json.JSONObject().put("type", "image_url")
+                .put("image_url", org.json.JSONObject().put("url", imageFile.toURI().toString())))
+        val messages = org.json.JSONArray().put(
+            org.json.JSONObject().put("role", "user").put("content", content))
+        application.graph.runtime.chat(messages, org.json.JSONObject(), null).text
+      } finally {
+        imageFile.delete()
+      }
+    }
+  }
+
+  private fun copyUriToCache(uri: android.net.Uri): java.io.File {
+    val directory = java.io.File(reactContext.cacheDir, "chat-images")
+    if (!directory.isDirectory && !directory.mkdirs()) {
+      throw IllegalStateException("无法创建图片缓存目录: " + directory)
+    }
+    val target = java.io.File.createTempFile("chat-img-", ".bin", directory)
+    reactContext.contentResolver.openInputStream(uri)?.use { input ->
+      java.io.FileOutputStream(target).use { output ->
+        input.copyTo(output)
+        output.fd.sync()
+      }
+    } ?: throw IllegalStateException("系统未提供图片输入流")
+    return target
+  }
+
+  @ReactMethod
   fun importMmproj(uriString: String, modelId: String, promise: Promise) {
     runAsync(promise, "IMPORT_MMPROJ_FAILED") {
       application.graph.exchange.importMmproj(Uri.parse(uriString), modelId)
