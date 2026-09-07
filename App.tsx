@@ -185,6 +185,7 @@ export default function App() {
   const [backendLoading, setBackendLoading] = useState(false);
   const chatScroll = useRef<ScrollView | null>(null);
   const logScroll = useRef<ScrollView | null>(null);
+  const chatScrollSig = useRef<string>('');
 
   const push = (kind: LogLine['kind'], text: string) =>
     setLog(prev => [...prev, {kind, text: `[${fmtClock(new Date())}] ${text}`}]);
@@ -633,7 +634,13 @@ export default function App() {
         ref={chatScroll}
         style={styles.chatList}
         contentContainerStyle={styles.chatListContent}
-        onContentSizeChange={() => chatScroll.current?.scrollToEnd({animated: true})}>
+        onContentSizeChange={() => {
+          const last = messages[messages.length - 1];
+          const sig = `${messages.length}:${last?.role ?? ''}:${last?.text.length ?? 0}:${typing ? 1 : 0}`;
+          if (sig === chatScrollSig.current) return;
+          chatScrollSig.current = sig;
+          chatScroll.current?.scrollToEnd({animated: true});
+        }}>
         {messages.map((m, i) => (
           <React.Fragment key={i}>
             {m.text !== '' ? (
