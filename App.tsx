@@ -107,6 +107,7 @@ type ModelEntry = {
   id: string;
   name: string;
   paired: boolean;
+  exportable: boolean;
   ready: boolean;
   resourceStatus: string;
   resourceError: string | null;
@@ -152,6 +153,7 @@ function parseModels(root: any): ModelEntry[] {
       paired:
         !!(m?.mmproj && String(m.mmproj).length > 0) ||
         (Array.isArray(m?.capabilities) && m.capabilities.includes('vision')),
+      exportable: !!resource?.path,
       ready: !!resource?.path && !contextPending && !registrationError,
       resourceStatus: String(resource?.status ?? 'MISSING'),
       resourceError: resource?.error == null ? null : String(resource.error),
@@ -1222,10 +1224,16 @@ export default function App() {
               <Text>删除</Text>
             </TouchableOpacity>
             <TouchableOpacity
+              style={[styles.btn, !model.exportable && styles.btnDisabled]}
+              disabled={!!busy || !model.exportable}
+              onPress={() => run('导出模型', () => Backend.exportModel(model.id))}>
+              <Text>导出</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
               style={[styles.btn, styles.btnLast]}
               disabled={!!busy}
               onPress={() => openModelSettings(model)}>
-              <Text>模板</Text>
+              <Text>⚙</Text>
             </TouchableOpacity>
           </View>
         </View>

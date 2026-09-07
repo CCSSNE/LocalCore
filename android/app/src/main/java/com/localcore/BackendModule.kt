@@ -454,6 +454,45 @@ class BackendModule(private val reactContext: ReactApplicationContext) :
   }
 
   @ReactMethod
+  fun exportModel(modelId: String, promise: Promise) {
+    executor.execute {
+      try {
+        val activity = reactContext.currentActivity ?: throw IllegalStateException("没有前台界面")
+        val files = application.graph.exchange.modelExportFiles(modelId)
+        val uris = ArrayList<Uri>(files.size)
+        files.forEach { file ->
+          uris.add(ModelExportProvider.uriFor(reactContext, modelId, file.role))
+        }
+        val send = Intent(if (uris.size == 1) Intent.ACTION_SEND else Intent.ACTION_SEND_MULTIPLE).apply {
+          type = "application/octet-stream"
+          addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+          if (uris.size == 1) putExtra(Intent.EXTRA_STREAM, uris[0])
+          else putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris)
+          clipData = ClipData.newRawUri(files[0].displayName, uris[0]).apply {
+            for (index in 1 until uris.size) addItem(ClipData.Item(uris[index]))
+          }
+        }
+        val chooser = Intent.createChooser(send, "导出模型").apply {
+          addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        activity.runOnUiThread {
+          try {
+            activity.startActivity(chooser)
+            application.graph.events.info("resource", "已打开模型导出分享器 $modelId，共 ${uris.size} 个文件")
+            promise.resolve("已打开系统分享器（${uris.size} 个文件）")
+          } catch (error: Throwable) {
+            android.util.Log.e("Backend", "EXPORT_MODEL_FAILED", error)
+            promise.reject("EXPORT_MODEL_FAILED", error.message, error)
+          }
+        }
+      } catch (error: Throwable) {
+        android.util.Log.e("Backend", "EXPORT_MODEL_FAILED", error)
+        promise.reject("EXPORT_MODEL_FAILED", error.message, error)
+      }
+    }
+  }
+
+  @ReactMethod
   fun deleteModel(modelId: String, promise: Promise) {
     runAsync(promise, "DELETE_MODEL_FAILED") {
       val graph = application.graph

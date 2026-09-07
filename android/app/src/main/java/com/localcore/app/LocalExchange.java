@@ -25,12 +25,26 @@ import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
 public final class LocalExchange {
+    public static final class ExportFile {
+        public final String role;
+        public final File file;
+        public final String displayName;
+
+        ExportFile(String role, File file, String displayName) {
+            this.role = role;
+            this.file = file;
+            this.displayName = displayName;
+        }
+    }
+
     private static final String CORE_ID = "localcore.core";
     private final Context context;
     private final ConfigRepository config;
@@ -246,6 +260,44 @@ public final class LocalExchange {
             zipDirectory(directory, output);
         }
         events.info("resource", "核心已导出 " + coreId);
+    }
+
+    public List<ExportFile> modelExportFiles(String modelId) {
+        JSONObject current = config.current();
+        JSONObject model = modelById(current, modelId);
+        List<ExportFile> result = new ArrayList<>();
+        result.add(modelExportFile(current, model, "model"));
+        String mmprojId = model.optString("mmproj");
+        if (!mmprojId.isEmpty()) result.add(modelExportFile(current, model, "projection"));
+        return result;
+    }
+
+    public ExportFile modelExportFile(String modelId, String role) {
+        JSONObject current = config.current();
+        return modelExportFile(current, modelById(current, modelId), role);
+    }
+
+    private ExportFile modelExportFile(JSONObject current, JSONObject model, String role) {
+        String resourceId;
+        String fallbackName;
+        if ("model".equals(role)) {
+            resourceId = model.optString("resource");
+            fallbackName = model.optString("name", model.optString("id")) + ".gguf";
+        } else if ("projection".equals(role)) {
+            resourceId = model.optString("mmproj");
+            if (resourceId.isEmpty()) {
+                throw new IllegalArgumentException("模型没有配对 MMPROJ: " + model.optString("id"));
+            }
+            fallbackName = model.optString("name", model.optString("id")) + "-mmproj.gguf";
+        } else {
+            throw new IllegalArgumentException("未知模型导出角色: " + role);
+        }
+        JSONObject descriptor = resourceById(current, resourceId);
+        String fallbackLeaf = leafName(fallbackName);
+        if (fallbackLeaf.isEmpty()) fallbackLeaf = role + ".gguf";
+        String displayName = leafName(descriptor.optString("fileName", fallbackLeaf));
+        if (displayName.isEmpty()) displayName = fallbackLeaf;
+        return new ExportFile(role, resources.installedFile(resourceId), displayName);
     }
 
     public String readTemplate(String modelId) throws Exception {
@@ -582,6 +634,20 @@ public final class LocalExchange {
             if (model != null && modelId.equals(model.optString("id"))) return model;
         }
         return null;
+    }
+
+    private static JSONObject resourceById(JSONObject config, String resourceId) {
+        JSONArray resources = config.optJSONArray("resources");
+        for (int i = 0; i < resources.length(); i++) {
+            JSONObject resource = resources.optJSONObject(i);
+            if (resource != null && resourceId.equals(resource.optString("id"))) return resource;
+        }
+        throw new IllegalArgumentException("配置中不存在资源: " + resourceId);
+    }
+
+    private static String leafName(String value) {
+        int slash = Math.max(value.lastIndexOf('/'), value.lastIndexOf('\\'));
+        return slash < 0 ? value : value.substring(slash + 1);
     }
 
     private String uniqueResourceId(String base) {

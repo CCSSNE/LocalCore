@@ -37,5 +37,11 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Runs the user-configured local LLM HTTP backend and resource transfers" />
         </service>
+
+        <provider
+            android:name=".ModelExportProvider"
+            android:authorities="${applicationId}.model-export"
+            android:exported="false"
+            android:grantUriPermissions="true" />
     </application>
 </manifest>
