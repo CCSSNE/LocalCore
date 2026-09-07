@@ -40,7 +40,7 @@ foreach ($abi in $Abis) {
         "-DCMAKE_TOOLCHAIN_FILE=$toolchain" `
         "-DANDROID_ABI=$abi" `
         '-DANDROID_PLATFORM=android-28' `
-        '-DANDROID_STL=c++_shared' `
+        '-DANDROID_STL=c++_static' `
         "-DLLAMA_CPP_DIR=$llamaDir" `
         "-DLOCALCORE_CORE_VERSION=$CoreVersion" `
         "-DLOCALCORE_LLAMA_VERSION=$LlamaTag-$commit" `
