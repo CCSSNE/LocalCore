@@ -423,6 +423,9 @@ extern "C" LOCALCORE_EXPORT int localcore_core_infer(
         common_chat_msg * message_pointer = nullptr;
         if (chat_pointer != nullptr) {
             common_chat_parser_params parser(*chat_pointer);
+            if (!chat_pointer->parser.empty()) {
+                parser.parser.load(chat_pointer->parser);
+            }
             parser.reasoning_format = common_reasoning_format_from_name(
                     string_value(request, "reasoning_format", "none"));
             message = common_chat_parse(text, false, parser);
