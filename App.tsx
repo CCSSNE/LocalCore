@@ -153,6 +153,8 @@ export default function App() {
   const [modelError, setModelError] = useState<string | null>(null);
   const [listLoading, setListLoading] = useState(false);
   const [loadedId, setLoadedId] = useState<string | null>(null);
+  const [runtimePhase, setRuntimePhase] = useState<string | null>(null);
+  const [runtimeError, setRuntimeError] = useState<string | null>(null);
   const [coreInfo, setCoreInfo] = useState<{id: string; version: string} | null>(null);
   const [coreError, setCoreError] = useState<string | null>(null);
   const [coreLoading, setCoreLoading] = useState(false);
@@ -199,6 +201,9 @@ export default function App() {
       const root = JSON.parse(value);
       setModelList(parseModels(root));
       setLoadedId(root?.runtime?.modelId ?? null);
+      setRuntimePhase(root?.runtime?.phase ?? null);
+      const runtimeErr = root?.runtime?.error;
+      setRuntimeError(runtimeErr == null ? null : String(runtimeErr));
       setModelError(null);
     } catch (error: any) {
       const message = error?.message ?? String(error);
@@ -618,8 +623,22 @@ export default function App() {
               {model.name}
             </Text>
             {model.paired ? <EyeIcon /> : null}
-            {loadedId === model.id ? <Text style={styles.tagLoaded}>已加载</Text> : null}
+            {loadedId === model.id &&
+            (runtimePhase === 'model_ready' || runtimePhase === 'generating') ? (
+              <Text style={styles.tagLoaded}>已加载</Text>
+            ) : null}
+            {loadedId === model.id && runtimePhase === 'model_loading' ? (
+              <Text style={styles.tagLoading}>加载中</Text>
+            ) : null}
+            {loadedId === model.id && runtimePhase === 'error' ? (
+              <Text style={styles.tagError}>加载失败</Text>
+            ) : null}
           </View>
+          {loadedId === model.id && runtimePhase === 'error' && runtimeError ? (
+            <Text style={styles.loadErrorText} numberOfLines={2}>
+              {runtimeError}
+            </Text>
+          ) : null}
           <View style={styles.rowBtns}>
             <TouchableOpacity
               style={styles.btn}
@@ -904,6 +923,9 @@ const styles = StyleSheet.create({
   cardTitle: {flex: 1, fontSize: 15, color: '#111111', fontWeight: '600'},
   cardSub: {fontSize: 12, color: '#333333', marginTop: 4},
   tagLoaded: {fontSize: 12, color: '#1a3faa', marginLeft: 6, fontWeight: '700'},
+  tagLoading: {fontSize: 12, color: '#b26a00', marginLeft: 6, fontWeight: '700'},
+  tagError: {fontSize: 12, color: '#b00020', marginLeft: 6, fontWeight: '700'},
+  loadErrorText: {fontSize: 12, color: '#b00020', marginBottom: 8},
   eyeOuter: {
     width: 26,
     height: 16,
