@@ -143,8 +143,10 @@ class BackendModule(private val reactContext: ReactApplicationContext) :
         streamChat(modelId, prompt, null)
       } else {
         // MediaResolver 只接受 data:base64 或 URL 能直接打开的地址，content:// 必须先落到缓存文件再转 file://。
+        emitStage("图片拷贝开始")
         val imageFile = copyUriToCache(Uri.parse(imageUriString))
         try {
+          emitStage("图片拷贝完成" + imageFile.length() + "字节")
           streamChat(modelId, prompt, imageFile.toURI().toString())
         } finally {
           imageFile.delete()
@@ -165,13 +167,15 @@ class BackendModule(private val reactContext: ReactApplicationContext) :
       org.json.JSONArray().put(
           org.json.JSONObject().put("role", "user").put("content", content))
     }
+    emitStage("消息组装完成")
     // 单飞行：JS 侧 busy 锁保证同一时间只有一个流，无需 id 分流。
     val emitter = reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
     val result = application.graph.runtime.chat(messages, org.json.JSONObject(),
         RuntimeManager.TokenConsumer { token ->
           emitter.emit("LocalCoreChatToken", token)
           true
-        })
+        },
+        RuntimeManager.StageListener { stage -> emitStage(stage) })
     return org.json.JSONObject()
         .put("text", result.text)
         .put("promptTokens", result.promptTokens)
@@ -179,6 +183,14 @@ class BackendModule(private val reactContext: ReactApplicationContext) :
         .put("ttftMs", result.ttftMs)
         .put("llmMs", result.llmMs)
         .toString()
+  }
+
+  private fun emitStage(text: String) {
+    try {
+      reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+          .emit("LocalCoreChatStage", text)
+    } catch (ignored: Exception) {
+    }
   }
 
   private fun copyUriToCache(uri: android.net.Uri): java.io.File {

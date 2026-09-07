@@ -28,6 +28,10 @@ public final class RuntimeManager {
         boolean onToken(String token) throws IOException;
     }
 
+    public interface StageListener {
+        void onStage(String stage);
+    }
+
     public static final class Result {
         public final int promptTokens;
         public final int completionTokens;
@@ -123,21 +127,31 @@ public final class RuntimeManager {
     }
 
     public Result chat(JSONArray messages, JSONObject request, TokenConsumer consumer) {
+        return chat(messages, request, consumer, null);
+    }
+
+    public Result chat(JSONArray messages, JSONObject request, TokenConsumer consumer, StageListener stages) {
+        stage(stages, "媒体解析开始(" + messages.length() + "条消息)");
         try (MediaResolver.Prepared prepared = media.prepare(messages)) {
+            stage(stages, "媒体解析完成(" + prepared.paths.length() + "个媒体文件)");
             JSONObject body = new JSONObject(request.toString());
             body.put("messages", prepared.messages);
             body.put("mediaPaths", prepared.paths);
-            return runInference("chat", body, consumer);
+            return runInference("chat", body, consumer, stages);
         } catch (Exception error) {
             throw asRuntime(error);
         }
     }
 
     public Result complete(String prompt, JSONObject request, TokenConsumer consumer) {
+        return complete(prompt, request, consumer, null);
+    }
+
+    public Result complete(String prompt, JSONObject request, TokenConsumer consumer, StageListener stages) {
         try {
             JSONObject body = new JSONObject(request.toString());
             body.put("prompt", prompt);
-            return runInference("complete", body, consumer);
+            return runInference("complete", body, consumer, stages);
         } catch (Exception error) {
             throw asRuntime(error);
         }
@@ -155,12 +169,15 @@ public final class RuntimeManager {
         listeners.remove(listener);
     }
 
-    private Result runInference(String kind, JSONObject body, TokenConsumer consumer) {
+    private Result runInference(String kind, JSONObject body, TokenConsumer consumer, StageListener stages) {
         inference.lock();
         final long startedAt = System.currentTimeMillis();
         final long[] firstTokenAt = {0};
         final TokenConsumer timed = consumer == null ? null : token -> {
-            if (firstTokenAt[0] == 0) firstTokenAt[0] = System.currentTimeMillis();
+            if (firstTokenAt[0] == 0) {
+                firstTokenAt[0] = System.currentTimeMillis();
+                stage(stages, "首字到达");
+            }
             return consumer.onToken(token);
         };
         try {
@@ -169,7 +186,9 @@ public final class RuntimeManager {
             setState(new RuntimeState(RuntimeState.Phase.GENERATING,
                     before.coreId, before.coreVersion, loadedModelId, null));
             body.put("type", kind);
+            stage(stages, "核心推理开始");
             JSONObject response = new JSONObject(nativeRuntime.infer(body.toString(), timed));
+            stage(stages, "核心推理结束");
             setState(new RuntimeState(RuntimeState.Phase.MODEL_READY,
                     before.coreId, before.coreVersion, loadedModelId, null));
             long elapsed = System.currentTimeMillis() - startedAt;
@@ -186,6 +205,10 @@ public final class RuntimeManager {
         } finally {
             inference.unlock();
         }
+    }
+
+    private static void stage(StageListener stages, String text) {
+        if (stages != null) stages.onStage(text);
     }
 
     private JSONObject findModel(String id) {
