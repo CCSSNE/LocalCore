@@ -43,14 +43,24 @@ public final class ConfigRepository {
                 }
             }
             active = Jsons.readObject(activeFile);
+            boolean migrated = false;
             int schemaVersion = active.optInt("schemaVersion");
             if (schemaVersion == 2) {
                 active = migrateV2(active);
-                AtomicFiles.writeUtf8(activeFile, Jsons.format(active));
                 events.info("config", "配置已从 schemaVersion=2 迁移到 3");
-            } else if (schemaVersion != 3) {
+                schemaVersion = 3;
+                migrated = true;
+            }
+            if (schemaVersion == 3) {
+                active = migrateV3(active);
+                events.info("config", "配置已从 schemaVersion=3 迁移到 4");
+                schemaVersion = 4;
+                migrated = true;
+            }
+            if (schemaVersion != 4) {
                 throw new IllegalStateException("不支持的配置 schemaVersion=" + schemaVersion);
             }
+            if (migrated) AtomicFiles.writeUtf8(activeFile, Jsons.format(active));
             events.info("config", "已加载配置 schemaVersion=" + active.optInt("schemaVersion"));
         } catch (Exception error) {
             events.error("config", "有效配置加载失败", error);
@@ -102,7 +112,7 @@ public final class ConfigRepository {
     private JSONObject migrateV2(JSONObject previous) throws Exception {
         JSONObject defaults;
         try (InputStream input = context.getAssets().open("default_config.json")) {
-            defaults = Jsons.parseObject(Jsons.readUtf8(input), "内置 schemaVersion=3 配置");
+            defaults = Jsons.parseObject(Jsons.readUtf8(input), "内置配置");
         }
         JSONObject migrated = new JSONObject(previous.toString());
         migrated.put("schemaVersion", 3);
@@ -120,6 +130,17 @@ public final class ConfigRepository {
         for (int i = 0; i < models.length(); i++) {
             models.getJSONObject(i).put("core", "localcore.core");
         }
+        return migrated;
+    }
+
+    private JSONObject migrateV3(JSONObject previous) throws Exception {
+        JSONObject defaults;
+        try (InputStream input = context.getAssets().open("default_config.json")) {
+            defaults = Jsons.parseObject(Jsons.readUtf8(input), "内置配置");
+        }
+        JSONObject migrated = new JSONObject(previous.toString());
+        migrated.put("schemaVersion", 4);
+        migrated.put("modelDownloads", defaults.getJSONObject("modelDownloads"));
         return migrated;
     }
 }

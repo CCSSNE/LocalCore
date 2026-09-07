@@ -31,6 +31,9 @@ import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
@@ -50,6 +53,8 @@ public final class ResourceManager {
     private final File stateFile;
     private final ExecutorService executor = Executors.newCachedThreadPool();
     private final Map<String, ResourceState> states = new HashMap<>();
+    private final Map<String, Future<?>> tasks = new HashMap<>();
+    private final Map<String, AtomicBoolean> cancellations = new HashMap<>();
     private final List<Listener> listeners = new CopyOnWriteArrayList<>();
 
     public ResourceManager(Context context, ConfigRepository config, EventLog events) {
@@ -101,13 +106,21 @@ public final class ResourceManager {
         installDescriptor(descriptor(id), null);
     }
 
+    public void install(String id, InstallListener listener) {
+        installDescriptor(descriptor(id), listener);
+    }
+
     public void installConfiguration(JSONObject descriptor, InstallListener listener) {
         installDescriptor(descriptor, listener);
     }
 
     private void installDescriptor(JSONObject descriptor, InstallListener listener) {
         String id = descriptor.optString("id");
+        AtomicBoolean cancellation = new AtomicBoolean(false);
         synchronized (this) {
+            if (cancellations.containsKey(id)) {
+                throw new IllegalStateException("资源取消正在收尾，请稍后重试: " + id);
+            }
             ResourceState existing = states.get(id);
             if (existing != null && (existing.status == ResourceState.Status.QUEUED
                     || existing.status == ResourceState.Status.DOWNLOADING)) {
@@ -119,8 +132,23 @@ public final class ResourceManager {
             update(new ResourceState(id, descriptor.optString("type"), activeVersion,
                     descriptor.optString("version"), ResourceState.Status.QUEUED, 0,
                     effective(descriptor).optLong("size"), activePath, null));
+            cancellations.put(id, cancellation);
+            FutureTask<Void> task = new FutureTask<>(() -> {
+                try {
+                    downloadAndInstall(descriptor, listener, cancellation);
+                } finally {
+                    synchronized (ResourceManager.this) {
+                        if (cancellations.get(id) == cancellation) {
+                            cancellations.remove(id);
+                            tasks.remove(id);
+                        }
+                    }
+                }
+                return null;
+            });
+            tasks.put(id, task);
+            executor.execute(task);
         }
-        executor.execute(() -> downloadAndInstall(descriptor, listener));
     }
 
     public void installAllOutdated() {
@@ -179,7 +207,8 @@ public final class ResourceManager {
     public synchronized void delete(String id) throws IOException {
         JSONObject descriptor = descriptor(id);
         ResourceState state = states.get(id);
-        if (state != null && state.status == ResourceState.Status.DOWNLOADING) {
+        if (state != null && (state.status == ResourceState.Status.QUEUED
+                || state.status == ResourceState.Status.DOWNLOADING)) {
             throw new IllegalStateException("资源正在写入，不能删除: " + id);
         }
         File resourceDirectory = new File(new File(root, descriptor.optString("type")), id);
@@ -195,6 +224,28 @@ public final class ResourceManager {
         events.info("resource", "已删除资源 " + id);
     }
 
+    public void cancel(String id) {
+        Future<?> task;
+        AtomicBoolean cancellation;
+        ResourceState before;
+        synchronized (this) {
+            before = states.get(id);
+            if (before == null || (before.status != ResourceState.Status.QUEUED
+                    && before.status != ResourceState.Status.DOWNLOADING)) {
+                throw new IllegalStateException("资源没有正在执行的下载: " + id);
+            }
+            cancellation = cancellations.get(id);
+            if (cancellation == null) throw new IllegalStateException("资源任务状态不一致: " + id);
+            cancellation.set(true);
+            task = tasks.get(id);
+            update(new ResourceState(id, before.type, before.version, before.targetVersion,
+                    ResourceState.Status.CANCELLED, before.downloaded, before.total, before.path,
+                    "下载已取消，可重新执行以从断点续传"));
+        }
+        if (before.status == ResourceState.Status.DOWNLOADING && task != null) task.cancel(true);
+        events.info("resource", "已取消资源下载 " + id);
+    }
+
     public void addListener(Listener listener) {
         listeners.add(listener);
     }
@@ -203,11 +254,12 @@ public final class ResourceManager {
         listeners.remove(listener);
     }
 
-    private void downloadAndInstall(JSONObject descriptor, InstallListener listener) {
+    private void downloadAndInstall(JSONObject descriptor, InstallListener listener, AtomicBoolean cancellation) {
         String id = descriptor.optString("id");
         JSONObject source;
         File installed;
         try {
+            throwIfCancelled(cancellation);
             source = effective(descriptor);
             File partial = partialFile(id, descriptor.optString("version"));
             long existing = partial.isFile() ? partial.length() : 0;
@@ -219,17 +271,22 @@ public final class ResourceManager {
                 existing = 0;
             }
             ResourceState active = activeState(id);
-            update(taskState(descriptor, active, ResourceState.Status.DOWNLOADING, existing, total, null));
+            updateDownloadState(cancellation,
+                    taskState(descriptor, active, ResourceState.Status.DOWNLOADING, existing, total, null));
             if (total <= 0 || existing != total) {
-                transfer(source.optString("url"), partial, existing, total, descriptor);
+                transfer(source.optString("url"), partial, existing, total, descriptor, cancellation);
             }
+            throwIfCancelled(cancellation);
             verifyIntegrity(partial, source);
-            installed = activate(descriptor, source, partial);
-            update(new ResourceState(id, descriptor.optString("type"), descriptor.optString("version"),
-                    descriptor.optString("version"), ResourceState.Status.INSTALLED,
-                    total, total, installed.getAbsolutePath(), null));
+            throwIfCancelled(cancellation);
+            installed = activateDownloaded(descriptor, source, partial, cancellation, total);
             events.info("resource", "资源已原子激活 " + id + "@" + descriptor.optString("version"));
         } catch (Exception error) {
+            if (cancellation.get() || error instanceof DownloadCancelledException
+                    || error instanceof java.io.InterruptedIOException || Thread.currentThread().isInterrupted()) {
+                markCancelled(descriptor, cancellation);
+                return;
+            }
             failed(descriptor, error);
             events.error("resource", "资源安装失败 " + id, error);
             return;
@@ -278,7 +335,8 @@ public final class ResourceManager {
     }
 
     private void transfer(String address, File partial, long existing, long expected,
-                          JSONObject descriptor) throws IOException {
+                          JSONObject descriptor, AtomicBoolean cancellation) throws IOException {
+        throwIfCancelled(cancellation);
         HttpURLConnection connection = (HttpURLConnection) new URL(address).openConnection();
         connection.setConnectTimeout(30_000);
         connection.setReadTimeout(30_000);
@@ -310,12 +368,14 @@ public final class ResourceManager {
             long downloaded = existing;
             long lastReport = 0;
             while ((count = input.read(buffer)) != -1) {
+                throwIfCancelled(cancellation);
                 output.write(buffer, 0, count);
                 downloaded += count;
                 long now = System.currentTimeMillis();
                 if (now - lastReport >= 500) {
-                    update(taskState(descriptor, activeState(descriptor.optString("id")),
-                            ResourceState.Status.DOWNLOADING, downloaded, expected, null));
+                    updateDownloadState(cancellation,
+                            taskState(descriptor, activeState(descriptor.optString("id")),
+                                    ResourceState.Status.DOWNLOADING, downloaded, expected, null));
                     lastReport = now;
                 }
             }
@@ -324,6 +384,47 @@ public final class ResourceManager {
         } finally {
             connection.disconnect();
         }
+    }
+
+    private void updateDownloadState(AtomicBoolean cancellation, ResourceState state)
+            throws DownloadCancelledException {
+        synchronized (this) {
+            throwIfCancelled(cancellation);
+            update(state);
+        }
+    }
+
+    private File activateDownloaded(JSONObject descriptor, JSONObject source, File partial,
+                                    AtomicBoolean cancellation, long total) throws IOException {
+        synchronized (this) {
+            throwIfCancelled(cancellation);
+            File installed = activate(descriptor, source, partial);
+            update(new ResourceState(descriptor.optString("id"), descriptor.optString("type"),
+                    descriptor.optString("version"), descriptor.optString("version"),
+                    ResourceState.Status.INSTALLED, total, total, installed.getAbsolutePath(), null));
+            return installed;
+        }
+    }
+
+    private void markCancelled(JSONObject descriptor, AtomicBoolean cancellation) {
+        synchronized (this) {
+            if (cancellations.get(descriptor.optString("id")) != cancellation) return;
+            ResourceState before = states.get(descriptor.optString("id"));
+            if (before == null || before.status == ResourceState.Status.CANCELLED) return;
+            update(new ResourceState(before.id, before.type, before.version, before.targetVersion,
+                    ResourceState.Status.CANCELLED, before.downloaded, before.total, before.path,
+                    "下载已取消，可重新执行以从断点续传"));
+        }
+    }
+
+    private static void throwIfCancelled(AtomicBoolean cancellation) throws DownloadCancelledException {
+        if (cancellation.get() || Thread.currentThread().isInterrupted()) {
+            throw new DownloadCancelledException();
+        }
+    }
+
+    private static final class DownloadCancelledException extends IOException {
+        DownloadCancelledException() { super("下载已取消"); }
     }
 
     private File activate(JSONObject descriptor, JSONObject source, File partial) throws IOException {

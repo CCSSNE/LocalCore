@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "hostApi": 2,
   "server": {
     "host": "127.0.0.1",
@@ -19,6 +19,21 @@
     "enabled": true,
     "manifestUrl": "https://github.com/CCSSNE/LocalCore/releases/download/core-stable/core-manifest.json",
     "checkIntervalMinutes": 360
+  },
+  "modelDownloads": {
+    "activeSource": "hf-mirror",
+    "sources": [
+      {
+        "id": "huggingface",
+        "name": "Hugging Face",
+        "endpoint": "https://huggingface.co"
+      },
+      {
+        "id": "hf-mirror",
+        "name": "HF-Mirror",
+        "endpoint": "https://hf-mirror.com"
+      }
+    ]
   },
   "diagnostics": {
     "minimumLevel": "info",

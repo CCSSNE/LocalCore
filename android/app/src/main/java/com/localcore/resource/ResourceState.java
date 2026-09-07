@@ -4,7 +4,7 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 public final class ResourceState {
-    public enum Status { MISSING, UPDATE_AVAILABLE, QUEUED, DOWNLOADING, INSTALLED, FAILED }
+    public enum Status { MISSING, UPDATE_AVAILABLE, QUEUED, DOWNLOADING, INSTALLED, FAILED, CANCELLED }
 
     public final String id;
     public final String type;

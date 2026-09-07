@@ -413,6 +413,36 @@ class BackendModule(private val reactContext: ReactApplicationContext) :
   }
 
   @ReactMethod
+  fun downloadHfModel(requestJson: String, promise: Promise) {
+    runAsync(promise, "DOWNLOAD_HF_MODEL_FAILED") {
+      application.graph.exchange.downloadHfModel(requestJson)
+    }
+  }
+
+  @ReactMethod
+  fun downloadHfProjection(requestJson: String, modelId: String, promise: Promise) {
+    runAsync(promise, "DOWNLOAD_HF_MMPROJ_FAILED") {
+      application.graph.exchange.downloadHfProjection(requestJson, modelId)
+    }
+  }
+
+  @ReactMethod
+  fun cancelResourceDownload(resourceId: String, promise: Promise) {
+    runAsync(promise, "CANCEL_RESOURCE_DOWNLOAD_FAILED") {
+      application.graph.resources.cancel(resourceId)
+      null
+    }
+  }
+
+  @ReactMethod
+  fun setModelDownloadSource(sourceId: String, promise: Promise) {
+    runAsync(promise, "SET_MODEL_DOWNLOAD_SOURCE_FAILED") {
+      application.graph.exchange.setModelDownloadSource(sourceId)
+      null
+    }
+  }
+
+  @ReactMethod
   fun deleteModel(modelId: String, promise: Promise) {
     runAsync(promise, "DELETE_MODEL_FAILED") {
       val graph = application.graph
@@ -543,6 +573,9 @@ class BackendModule(private val reactContext: ReactApplicationContext) :
       state.put("backend", org.json.JSONObject(graph.backend.current().toString()))
       state.put("runtime", org.json.JSONObject(graph.runtime.state().toString()))
       state.put("coreUpdate", org.json.JSONObject(graph.updates.state().toString()))
+      val resourceStates = org.json.JSONArray()
+      graph.resources.states().forEach { resourceStates.put(it.toJson()) }
+      state.put("resourceStates", resourceStates)
       state.put("config", graph.config.current())
       promise.resolve(state.toString())
     } catch (error: Exception) {
