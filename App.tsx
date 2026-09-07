@@ -797,7 +797,7 @@ export default function App() {
                 <TouchableOpacity onPress={() => setViewerData({uris: pendingImages, index: idx})}>
                   <Image source={{uri}} style={styles.pendingThumb} resizeMode="cover" />
                 </TouchableOpacity>
-                <TouchableOpacity onPress={() => removePendingImage(uri)} style={styles.pendingThumbX} hitSlop={8}>
+                <TouchableOpacity onPress={() => removePendingImage(uri)} style={styles.pendingThumbX} hitSlop={10}>
                   <Text style={styles.pendingThumbXText}>×</Text>
                 </TouchableOpacity>
               </View>
@@ -1384,9 +1384,10 @@ const styles = StyleSheet.create({
     borderTopColor: '#e5e5e5',
     backgroundColor: '#f7f7f7',
     paddingVertical: 8,
+    overflow: 'visible',
   },
-  pendingStripContent: {paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center'},
-  pendingThumbWrap: {marginRight: 8, position: 'relative'},
+  pendingStripContent: {paddingHorizontal: 12, paddingTop: 10, paddingBottom: 6, flexDirection: 'row', alignItems: 'center'},
+  pendingThumbWrap: {marginRight: 10, marginTop: 2, position: 'relative', overflow: 'visible', zIndex: 1},
   pendingThumb: {width: 56, height: 56, borderRadius: 8},
   pendingThumbX: {
     position: 'absolute',
@@ -1399,6 +1400,8 @@ const styles = StyleSheet.create({
     opacity: 0.8,
     alignItems: 'center',
     justifyContent: 'center',
+    zIndex: 10,
+    elevation: 10,
   },
   pendingThumbXText: {color: '#ffffff', fontSize: 14, lineHeight: 16, fontWeight: '700'},
   pendingBar: {
