@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="localcore_background">#0B0F14</color>
+    <color name="localcore_surface">#141B24</color>
+    <color name="localcore_primary">#65D6AD</color>
+    <color name="localcore_text">#E8EEF5</color>
+    <color name="localcore_muted">#9AA8B7</color>
+    <color name="localcore_error">#FF6B6B</color>
+</resources>
+

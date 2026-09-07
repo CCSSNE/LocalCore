@@ -1,0 +1,13 @@
+{
+  "name": "localcore",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build:android:release": "cd android && gradlew.bat assembleRelease",
+    "build:runtime:android": "powershell -ExecutionPolicy Bypass -File scripts/build-runtime.ps1"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
+

@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "hostApi": 1,
+  "server": {
+    "host": "127.0.0.1",
+    "port": 11434,
+    "autoStart": false,
+    "apiKey": ""
+  },
+  "resources": [],
+  "models": []
+}
+

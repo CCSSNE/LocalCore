@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://localcore.dev/schema/config-v1.json",
+  "title": "LocalCore configuration",
+  "type": "object",
+  "required": ["schemaVersion", "hostApi", "server", "resources", "models"],
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "hostApi": {"const": 1},
+    "server": {
+      "type": "object",
+      "required": ["host", "port", "autoStart"],
+      "properties": {
+        "host": {"type": "string"},
+        "port": {"type": "integer", "minimum": 1, "maximum": 65535},
+        "autoStart": {"type": "boolean"},
+        "apiKey": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "resources": {"type": "array", "items": {"$ref": "#/$defs/resource"}},
+    "models": {"type": "array", "items": {"$ref": "#/$defs/model"}}
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "resource": {
+      "type": "object",
+      "required": ["id", "type", "version"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$"},
+        "type": {"enum": ["core", "model", "template", "config"]},
+        "version": {"type": "string"},
+        "url": {"type": "string", "format": "uri"},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "size": {"type": "integer", "minimum": 1},
+        "abi": {"type": "string"},
+        "entry": {"type": "string"},
+        "variants": {"type": "object"}
+      },
+      "additionalProperties": false
+    },
+    "model": {
+      "type": "object",
+      "required": ["id", "name", "resource", "core", "template", "load", "inference"],
+      "properties": {
+        "id": {"type": "string"},
+        "name": {"type": "string"},
+        "resource": {"type": "string"},
+        "core": {"type": "string"},
+        "template": {"type": "object"},
+        "load": {"type": "object"},
+        "inference": {"type": "object"},
+        "capabilities": {"type": "array", "items": {"type": "string"}}
+      },
+      "additionalProperties": false
+    }
+  }
+}

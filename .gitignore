@@ -1,0 +1,16 @@
+.gradle/
+.idea/
+*.iml
+local.properties
+build/
+android/.gradle/
+android/app/build/
+android/app/.cxx/
+android/app/src/main/jniLibs/
+node_modules/
+*.apk
+*.aab
+*.hprof
+.runtime-build/
+.localcore-packages/
+
