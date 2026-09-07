@@ -181,21 +181,42 @@ function EyeIcon() {
   );
 }
 
-const NUM_FIELDS: Array<{key: string; label: string; group: 'load' | 'inference'; int: boolean}> = [
-  {key: 'contextSize', label: '上下文长度', group: 'load', int: true},
-  {key: 'batchSize', label: '批大小', group: 'load', int: true},
-  {key: 'threads', label: '线程数', group: 'load', int: true},
-  {key: 'maxTokens', label: '最大生成数', group: 'inference', int: true},
-  {key: 'temperature', label: '温度', group: 'inference', int: false},
-  {key: 'topP', label: 'Top-P', group: 'inference', int: false},
-  {key: 'topK', label: 'Top-K', group: 'inference', int: true},
-  {key: 'seed', label: '随机种子（-1 随机）', group: 'inference', int: true},
+const LOAD_FIELDS: Array<{key: string; label: string; int: boolean}> = [
+  {key: 'contextSize', label: '上下文长度', int: true},
+  {key: 'batchSize', label: '批大小', int: true},
+  {key: 'threads', label: '线程数', int: true},
 ];
+
+const HOT_FIELDS: Array<{key: string; label: string; int: boolean}> = [
+  {key: 'maxTokens', label: '最大生成数', int: true},
+  {key: 'temperature', label: '温度', int: false},
+  {key: 'topP', label: 'Top-P', int: false},
+  {key: 'topK', label: 'Top-K', int: true},
+  {key: 'seed', label: '随机种子（-1 随机）', int: true},
+];
+
+const DEFAULT_HOT: Record<string, any> = {
+  maxTokens: 100000,
+  temperature: 0.7,
+  topP: 0.95,
+  topK: 40,
+  seed: -1,
+  stop: [],
+};
+
+const hotToForm = (hot: Record<string, any>): Record<string, string> => {
+  const form: Record<string, string> = {};
+  for (const field of HOT_FIELDS) {
+    const value = hot?.[field.key];
+    form[field.key] = value === undefined || value === null ? '' : String(value);
+  }
+  form.stop = Array.isArray(hot?.stop) ? hot.stop.join(',') : '';
+  return form;
+};
 
 export default function App() {
   const [route, setRoute] = useState<RouteKey>('chat');
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [chatMenuOpen, setChatMenuOpen] = useState(false);
   const [log, setLog] = useState<LogLine[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMsg[]>([]);
@@ -220,6 +241,20 @@ export default function App() {
   const [tplText, setTplText] = useState('');
   const [tplLoading, setTplLoading] = useState(false);
   const [stForm, setStForm] = useState<Record<string, string>>({});
+  const [hotForm, setHotForm] = useState<Record<string, string>>(hotToForm(DEFAULT_HOT));
+  const [hotOrig, setHotOrig] = useState<Record<string, string>>(hotToForm(DEFAULT_HOT));
+  const hotNums = useRef<Record<string, any>>({...DEFAULT_HOT});
+  const [stOrig, setStOrig] = useState<{form: Record<string, string>; loadJson: string; inferenceJson: string; tpl: string; ready: boolean}>({
+    form: {},
+    loadJson: '{}',
+    inferenceJson: '{}',
+    tpl: '',
+    ready: false,
+  });
+  const [rightOpen, setRightOpen] = useState(false);
+  const [hotForm, setHotForm] = useState<Record<string, string>>(hotToForm(DEFAULT_HOT));
+  const [hotOrig, setHotOrig] = useState<Record<string, string>>(hotToForm(DEFAULT_HOT));
+  const hotNums = useRef<Record<string, any>>({...DEFAULT_HOT});
   const [coreRt, setCoreRt] = useState<{cuPhase: string | null; cuError: string | null}>({
     cuPhase: null,
     cuError: null,
@@ -253,9 +288,10 @@ export default function App() {
     setLog(prev => [...prev, {kind, text: `[${fmtClock(new Date())}] ${text}`}]);
 
   const go = (next: RouteKey) => {
+    if (rightOpen) closeRightDrawer();
     setRoute(next);
     setDrawerOpen(false);
-    setChatMenuOpen(false);
+    setRightOpen(false);
   };
 
   const run = (label: string, action: () => Promise<any>, afterOk?: () => void) => {
@@ -302,23 +338,63 @@ export default function App() {
     );
   };
 
+  const checkNum = (label: string, raw: string, int: boolean): number | null => {
+    const text = (raw ?? '').trim();
+    const value = Number(text);
+    if (text === '' || !Number.isFinite(value)) {
+      push('fail', `FAIL 保存设置 => ${label}必须是数字`);
+      return null;
+    }
+    if (int && !Number.isInteger(value)) {
+      push('fail', `FAIL 保存设置 => ${label}必须是整数`);
+      return null;
+    }
+    return value;
+  };
+
+  const persistSettings = (px: number, hot: Record<string, any>) => {
+    AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify({imageBudgetPx: px, hot})).catch((e: any) =>
+      push('fail', 'FAIL 保存设置文件 => ' + (e?.message ?? String(e))),
+    );
+  };
+
+  const applyHot = (hot: Record<string, any>) => {
+    hotNums.current = {...hot};
+    Backend.setHotParams(JSON.stringify(hot)).catch((e: any) =>
+      push('fail', 'FAIL 设置热参数 => ' + (e?.message ?? String(e))),
+    );
+  };
+
   const loadSettings = () => {
     AsyncStorage.getItem(SETTINGS_KEY)
       .then(raw => {
-        if (raw == null) {
-          applyBudgetPx(DEFAULT_BUDGET_PX);
-          return;
+        let budget = DEFAULT_BUDGET_PX;
+        let hot: Record<string, any> = {...DEFAULT_HOT};
+        if (raw != null) {
+          try {
+            const saved = JSON.parse(raw);
+            const px = Number(saved?.imageBudgetPx);
+            if (px > 0) budget = Math.round(px);
+            if (saved?.hot && typeof saved.hot === 'object') {
+              for (const key of ['maxTokens', 'temperature', 'topP', 'topK', 'seed']) {
+                const value = Number(saved.hot[key]);
+                if (Number.isFinite(value)) hot[key] = value;
+              }
+              if (Array.isArray(saved.hot.stop)) {
+                hot.stop = saved.hot.stop.filter((s: any) => typeof s === 'string');
+              }
+            }
+          } catch {
+            push('fail', 'FAIL 读取设置文件 => 文件损坏，用默认值');
+          }
         }
-        const px = Number(JSON.parse(raw)?.imageBudgetPx);
-        if (px > 0) {
-          const rounded = Math.round(px);
-          setBudgetWan(String(Math.round(rounded / 10000)));
-          applyBudgetPx(rounded);
-        } else {
-          applyBudgetPx(DEFAULT_BUDGET_PX);
-        }
+        setBudgetWan(String(Math.round(budget / 10000)));
+        setHotForm(hotToForm(hot));
+        setHotOrig(hotToForm(hot));
+        applyBudgetPx(budget);
+        applyHot(hot);
       })
-      .catch((e: any) => push('fail', 'FAIL 读取图片设置 => ' + (e?.message ?? String(e))));
+      .catch((e: any) => push('fail', 'FAIL 读取设置文件 => ' + (e?.message ?? String(e))));
   };
 
   const saveBudget = () => {
@@ -330,9 +406,7 @@ export default function App() {
     const px = Math.round(wan * 10000);
     setSettingsOpen(false);
     applyBudgetPx(px);
-    AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify({imageBudgetPx: px})).catch((e: any) =>
-      push('fail', 'FAIL 保存图片设置 => ' + (e?.message ?? String(e))),
-    );
+    persistSettings(px, hotNums.current);
   };
 
   const fetchModels = async () => {
@@ -800,20 +874,21 @@ export default function App() {
     setTplModel(model);
     setTplText('');
     setStForm({});
+    setStOrig({form: {}, loadJson: '{}', inferenceJson: '{}', tpl: '', ready: false});
     setTplLoading(true);
     setTplOpen(true);
     Promise.all([Backend.getModelSettings(model.id), Backend.getModelTemplate(model.id)])
       .then(([settings, text]: any[]) => {
         const root = JSON.parse(String(settings ?? '{}'));
         const form: Record<string, string> = {};
-        for (const field of NUM_FIELDS) {
-          const value = root?.[field.group]?.[field.key];
+        for (const field of LOAD_FIELDS) {
+          const value = root?.load?.[field.key];
           form[field.key] = value === undefined || value === null ? '' : String(value);
         }
-        const stop = root?.inference?.stop;
-        form.stop = Array.isArray(stop) ? stop.join(',') : '';
+        const tpl = String(text ?? '');
         setStForm(form);
-        setTplText(String(text ?? ''));
+        setStOrig({form: {...form}, loadJson: JSON.stringify(root?.load ?? {}), inferenceJson: JSON.stringify(root?.inference ?? {}), tpl, ready: true});
+        setTplText(tpl);
         setTplLoading(false);
       })
       .catch((e: any) => {
@@ -822,41 +897,92 @@ export default function App() {
       });
   };
 
-  const saveModelSettings = () => {
-    if (!tplModel) return;
+  const closeModelSettings = () => {
+    setTplOpen(false);
+    if (!tplModel || !stOrig.ready) return;
     const id = tplModel.id;
-    const load: Record<string, number> = {};
-    const inference: Record<string, any> = {};
-    for (const field of NUM_FIELDS) {
-      const raw = (stForm[field.key] ?? '').trim();
-      const value = Number(raw);
-      if (raw === '' || !Number.isFinite(value)) {
-        push('fail', `FAIL 保存设置 => ${field.label}必须是数字`);
-        return;
-      }
-      if (field.int && !Number.isInteger(value)) {
-        push('fail', `FAIL 保存设置 => ${field.label}必须是整数`);
-        return;
-      }
-      if (field.group === 'load') load[field.key] = value;
-      else inference[field.key] = value;
+    let origLoad: Record<string, any> = {};
+    try {
+      const parsed = JSON.parse(stOrig.loadJson);
+      if (parsed && typeof parsed === 'object') origLoad = parsed;
+    } catch {
+      push('fail', 'FAIL 保存设置 => 原始加载参数损坏，本次不保存');
+      return;
     }
-    inference.stop = stForm.stop
-      .split(',')
-      .map(s => s.trim())
-      .filter(s => s.length > 0);
+    const finalLoad: Record<string, any> = {...origLoad};
+    const fixed: Record<string, string> = {};
+    for (const field of LOAD_FIELDS) {
+      const value = checkNum(field.label, stForm[field.key] ?? '', field.int);
+      if (value === null) {
+        fixed[field.key] = stOrig.form[field.key] ?? '';
+      } else {
+        finalLoad[field.key] = value;
+      }
+    }
+    if (Object.keys(fixed).length > 0) setStForm(prev => ({...prev, ...fixed}));
+    const dirty =
+      LOAD_FIELDS.some(field => String(finalLoad[field.key] ?? '') !== String(stOrig.form[field.key] ?? '')) ||
+      tplText !== stOrig.tpl;
+    if (!dirty) return;
     const text = tplText;
+    const inferenceJson = stOrig.inferenceJson;
     run(
       '保存设置',
       async () => {
-        await Backend.setModelSettings(id, JSON.stringify(load), JSON.stringify(inference));
+        await Backend.setModelSettings(id, JSON.stringify(finalLoad), inferenceJson);
         await Backend.setModelTemplate(id, text);
       },
       () => {
-        setTplOpen(false);
         fetchModels();
       },
     );
+  };
+
+  const openRightDrawer = () => {
+    setHotOrig({...hotForm});
+    setRightOpen(true);
+  };
+
+  const closeRightDrawer = () => {
+    setRightOpen(false);
+    const finalHot: Record<string, any> = {};
+    const fixed: Record<string, string> = {};
+    for (const field of HOT_FIELDS) {
+      const value = checkNum(field.label, hotForm[field.key] ?? '', field.int);
+      if (value === null) {
+        fixed[field.key] = hotOrig[field.key] ?? '';
+        finalHot[field.key] = Number(hotOrig[field.key] ?? 0);
+      } else {
+        finalHot[field.key] = value;
+      }
+    }
+    finalHot.stop = (hotForm.stop ?? '')
+      .split(',')
+      .map(s => s.trim())
+      .filter(s => s.length > 0);
+    if (Object.keys(fixed).length > 0) setHotForm(prev => ({...prev, ...fixed}));
+    const dirty =
+      HOT_FIELDS.some(field => String(finalHot[field.key]) !== String(hotOrig[field.key] ?? '')) ||
+      (hotForm.stop ?? '') !== (hotOrig.stop ?? '');
+    if (!dirty) return;
+    applyHot(finalHot);
+    persistSettings(budgetPx, finalHot);
+    setHotOrig(hotToForm(finalHot));
+  };
+
+  const loadEmbedded = () => {
+    if (!tplModel) return;
+    const id = tplModel.id;
+    setTplLoading(true);
+    Backend.getEmbeddedTemplate(id)
+      .then((text: any) => {
+        setTplText(String(text ?? ''));
+        setTplLoading(false);
+      })
+      .catch((e: any) => {
+        setTplLoading(false);
+        push('fail', 'FAIL 读取内置模板 => ' + (e?.message ?? String(e)));
+      });
   };
 
   const confirmDelete = (model: ModelEntry) => {
@@ -1326,7 +1452,12 @@ export default function App() {
   const renderHeaderRight = () => {
     if (route === 'chat') {
       return (
-        <TouchableOpacity onPress={() => setChatMenuOpen(true)} style={styles.iconBtn}>
+        <TouchableOpacity
+          onPress={() => {
+            if (rightOpen) closeRightDrawer();
+            else openRightDrawer();
+          }}
+          style={styles.iconBtn}>
           <Text style={styles.iconText}>⋮</Text>
         </TouchableOpacity>
       );
@@ -1403,13 +1534,13 @@ export default function App() {
         visible={tplOpen}
         transparent
         animationType="fade"
-        onRequestClose={() => setTplOpen(false)}>
-        <Pressable style={styles.tplMask} onPress={() => setTplOpen(false)}>
+        onRequestClose={closeModelSettings}>
+        <Pressable style={styles.tplMask} onPress={closeModelSettings}>
           <Pressable style={styles.tplCard} onPress={e => e.stopPropagation()}>
             <Text style={styles.settingsTitle} numberOfLines={1}>
               设置{tplModel ? ' - ' + tplModel.name : ''}
             </Text>
-            <Text style={styles.hint}>加载项下次加载生效；推理项下次请求生效</Text>
+            <Text style={styles.hint}>加载项下次加载生效；退出自动保存</Text>
             {tplLoading ? (
               <View style={styles.centerBox}>
                 <ActivityIndicator />
@@ -1417,7 +1548,7 @@ export default function App() {
               </View>
             ) : (
               <ScrollView style={styles.tplScroll}>
-                {NUM_FIELDS.map(field => (
+                {LOAD_FIELDS.map(field => (
                   <View key={field.key}>
                     <Text style={styles.hint}>{field.label}</Text>
                     <TextInput
@@ -1429,14 +1560,27 @@ export default function App() {
                     />
                   </View>
                 ))}
-                <Text style={styles.hint}>停止词（逗号分隔）</Text>
-                <TextInput
-                  value={stForm.stop ?? ''}
-                  onChangeText={v => setStForm(prev => ({...prev, stop: v}))}
-                  placeholderTextColor="#999999"
-                  style={styles.settingsInput}
-                />
                 <Text style={styles.hint}>聊天模板</Text>
+                <View style={styles.rowBtns}>
+                  <TouchableOpacity
+                    style={[styles.btn, styles.btnFlex]}
+                    disabled={tplLoading}
+                    onPress={() => setTplText('')}>
+                    <Text>清空</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.btn, styles.btnFlex]}
+                    disabled={tplLoading || !tplText}
+                    onPress={() => run('复制模板', () => Backend.copyText(tplText))}>
+                    <Text>复制</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.btn, styles.btnFlex, styles.btnLast]}
+                    disabled={tplLoading || !tplModel}
+                    onPress={loadEmbedded}>
+                    <Text>默认</Text>
+                  </TouchableOpacity>
+                </View>
                 <TextInput
                   value={tplText}
                   onChangeText={setTplText}
@@ -1446,14 +1590,6 @@ export default function App() {
                 />
               </ScrollView>
             )}
-            <View style={styles.rowBtns}>
-              <TouchableOpacity
-                style={[styles.btn, styles.btnFlex, styles.btnLast]}
-                disabled={tplLoading || !!busy}
-                onPress={saveModelSettings}>
-                <Text>保存</Text>
-              </TouchableOpacity>
-            </View>
           </Pressable>
         </Pressable>
       </Modal>
@@ -1496,14 +1632,40 @@ export default function App() {
         </Pressable>
       </Modal>
 
-      {chatMenuOpen ? (
-        <Pressable style={styles.menuLayer} onPress={() => setChatMenuOpen(false)}>
-          <Pressable style={styles.menu} onPress={e => e.stopPropagation()}>
-            <TouchableOpacity
-              style={styles.menuItem}
-              onPress={clearChat}>
+      {rightOpen ? (
+        <Pressable style={styles.rightMask} onPress={closeRightDrawer}>
+          <Pressable style={styles.rightDrawer} onPress={e => e.stopPropagation()}>
+            <View style={styles.rightHead}>
+              <Text style={styles.drawerTitle}>推理设置</Text>
+              <TouchableOpacity onPress={closeRightDrawer} style={styles.iconBtn}>
+                <Text style={styles.iconText}>✕</Text>
+              </TouchableOpacity>
+            </View>
+            <TouchableOpacity style={[styles.btn, styles.clearBtn]} onPress={clearChat}>
               <Text>清空聊天记录</Text>
             </TouchableOpacity>
+            <ScrollView style={styles.rightScroll}>
+              {HOT_FIELDS.map(field => (
+                <View key={field.key}>
+                  <Text style={styles.hint}>{field.label}</Text>
+                  <TextInput
+                    value={hotForm[field.key] ?? ''}
+                    onChangeText={v => setHotForm(prev => ({...prev, [field.key]: v}))}
+                    keyboardType="numeric"
+                    placeholderTextColor="#999999"
+                    style={styles.settingsInput}
+                  />
+                </View>
+              ))}
+              <Text style={styles.hint}>停止词（逗号分隔）</Text>
+              <TextInput
+                value={hotForm.stop ?? ''}
+                onChangeText={v => setHotForm(prev => ({...prev, stop: v}))}
+                placeholderTextColor="#999999"
+                style={styles.settingsInput}
+              />
+            </ScrollView>
+            <Text style={styles.hint}>收起自动保存；下次请求生效</Text>
           </Pressable>
         </Pressable>
       ) : null}
@@ -1762,14 +1924,18 @@ const styles = StyleSheet.create({
   drawerItemActive: {backgroundColor: '#e8eefc'},
   drawerText: {fontSize: 15, color: '#333333'},
   drawerTextActive: {color: '#1a3faa', fontWeight: '700'},
-  menuLayer: {
+  rightMask: {
     position: 'absolute',
     top: 0,
     left: 0,
     right: 0,
     bottom: 0,
-    backgroundColor: 'transparent',
+    backgroundColor: 'rgba(0,0,0,0.3)',
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
   },
-  menu: {position: 'absolute', top: 94, right: 8, backgroundColor: '#ffffff', borderRadius: 10, borderWidth: 1, borderColor: '#e0e0e0', minWidth: 170, paddingVertical: 6, elevation: 4},
-  menuItem: {paddingVertical: 12, paddingHorizontal: 16},
+  rightDrawer: {width: 280, backgroundColor: '#ffffff', paddingTop: 56, paddingHorizontal: 12},
+  rightHead: {flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8},
+  rightScroll: {flex: 1},
+  clearBtn: {marginBottom: 10, alignItems: 'center'},
 });

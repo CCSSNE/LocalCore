@@ -251,17 +251,22 @@ public final class RuntimeManager {
         if (stages != null) stages.onStage(text);
     }
 
-    // 模型配置里的推理参数只做缺省：请求里已有的键不动，保证 API 显式传参永远优先。
+    private volatile JSONObject hotDefaults = new JSONObject();
+
+    public void setHotDefaults(String json) throws org.json.JSONException {
+        hotDefaults = new JSONObject(json == null ? "{}" : json);
+    }
+
+    // 全局热参数只做缺省：请求里已有的键不动，保证 API 显式传参永远优先。
+    // 与模型解绑后不再读模型配置；存量 inference 块留着不动但也不再看。
     private void applyModelDefaults(JSONObject body) throws org.json.JSONException {
-        JSONObject model = findModel(loadedModelId);
-        JSONObject inference = model.optJSONObject("inference");
-        if (inference == null) return;
-        putDefault(body, "max_tokens", inference.opt("maxTokens"));
-        putDefault(body, "temperature", inference.opt("temperature"));
-        putDefault(body, "top_p", inference.opt("topP"));
-        putDefault(body, "top_k", inference.opt("topK"));
-        putDefault(body, "seed", inference.opt("seed"));
-        putDefault(body, "stop", inference.optJSONArray("stop"));
+        JSONObject hot = hotDefaults;
+        putDefault(body, "max_tokens", hot.opt("maxTokens"));
+        putDefault(body, "temperature", hot.opt("temperature"));
+        putDefault(body, "top_p", hot.opt("topP"));
+        putDefault(body, "top_k", hot.opt("topK"));
+        putDefault(body, "seed", hot.opt("seed"));
+        putDefault(body, "stop", hot.optJSONArray("stop"));
     }
 
     private static void putDefault(JSONObject body, String key, Object value) throws org.json.JSONException {

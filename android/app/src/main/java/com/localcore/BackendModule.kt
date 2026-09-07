@@ -401,6 +401,13 @@ class BackendModule(private val reactContext: ReactApplicationContext) :
   }
 
   @ReactMethod
+  fun getEmbeddedTemplate(modelId: String, promise: Promise) {
+    runAsync(promise, "TEMPLATE_FAILED") {
+      application.graph.exchange.readTemplate(modelId)
+    }
+  }
+
+  @ReactMethod
   fun getModelSettings(modelId: String, promise: Promise) {
     runAsync(promise, "SETTINGS_FAILED") {
       application.graph.exchange.modelSettings(modelId)
@@ -602,6 +609,16 @@ class BackendModule(private val reactContext: ReactApplicationContext) :
       promise.resolve(null)
     } catch (error: Exception) {
       promise.reject("BUDGET_FAILED", error.message, error)
+    }
+  }
+
+  @ReactMethod
+  fun setHotParams(paramsJson: String, promise: Promise) {
+    try {
+      application.graph.runtime.setHotDefaults(paramsJson)
+      promise.resolve(null)
+    } catch (error: Exception) {
+      promise.reject("HOT_FAILED", error.message, error)
     }
   }
 
