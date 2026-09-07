@@ -157,6 +157,26 @@ public final class LocalExchange {
         return GgufMeta.chatTemplate(file);
     }
 
+    public String modelTemplate(String modelId) throws Exception {
+        JSONObject model = modelById(config.current(), modelId);
+        JSONObject template = model.optJSONObject("template");
+        if (template != null && "custom".equals(template.optString("mode"))) {
+            return template.optString("value", "");
+        }
+        return readTemplate(modelId);
+    }
+
+    public void setModelTemplate(String modelId, String text) throws Exception {
+        JSONObject next = config.current();
+        JSONObject model = modelById(next, modelId);
+        JSONObject template = new JSONObject();
+        template.put("mode", "custom");
+        template.put("value", text);
+        model.put("template", template);
+        config.activate(next.toString());
+        events.info("resource", "模型模板已自定义 " + modelId);
+    }
+
     public String currentCoreId() {
         return CORE_ID;
     }

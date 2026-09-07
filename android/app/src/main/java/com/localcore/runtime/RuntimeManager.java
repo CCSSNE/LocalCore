@@ -78,6 +78,10 @@ public final class RuntimeManager {
         return state;
     }
 
+    public void setMaxImagePixels(int pixels) {
+        media.setMaxImagePixels(pixels);
+    }
+
     public void loadModel(String modelId) {
         inference.lock();
         try {

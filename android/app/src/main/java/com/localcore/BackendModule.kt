@@ -359,6 +359,21 @@ class BackendModule(private val reactContext: ReactApplicationContext) :
   }
 
   @ReactMethod
+  fun getModelTemplate(modelId: String, promise: Promise) {
+    runAsync(promise, "TEMPLATE_FAILED") {
+      application.graph.exchange.modelTemplate(modelId)
+    }
+  }
+
+  @ReactMethod
+  fun setModelTemplate(modelId: String, text: String, promise: Promise) {
+    runAsync(promise, "TEMPLATE_FAILED") {
+      application.graph.exchange.setModelTemplate(modelId, text)
+      null
+    }
+  }
+
+  @ReactMethod
   fun importMmproj(uriString: String, modelId: String, promise: Promise) {
     runAsync(promise, "IMPORT_MMPROJ_FAILED") {
       application.graph.exchange.importMmproj(Uri.parse(uriString), modelId)
@@ -465,6 +480,17 @@ class BackendModule(private val reactContext: ReactApplicationContext) :
         }
         throw error
       }
+    }
+  }
+
+  @ReactMethod
+  fun setImageBudget(pixels: Int, promise: Promise) {
+    try {
+      if (pixels <= 0) throw IllegalArgumentException("分辨率预算必须大于0")
+      application.graph.runtime.setMaxImagePixels(pixels)
+      promise.resolve(null)
+    } catch (error: Exception) {
+      promise.reject("BUDGET_FAILED", error.message, error)
     }
   }
 

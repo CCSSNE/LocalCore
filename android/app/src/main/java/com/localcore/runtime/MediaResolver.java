@@ -35,12 +35,17 @@ final class MediaResolver {
 
     private static final String MARKER = "<__media__>";
     private final File cache;
+    private volatile int maxImagePixels = 100000;
 
     MediaResolver(Context context) {
         cache = new File(context.getCacheDir(), "request-media");
         if (!cache.isDirectory() && !cache.mkdirs()) {
             throw new IllegalStateException("无法创建请求媒体目录: " + cache);
         }
+    }
+
+    public void setMaxImagePixels(int pixels) {
+        maxImagePixels = pixels;
     }
 
     Prepared prepare(JSONArray input) throws IOException {
@@ -65,11 +70,78 @@ final class MediaResolver {
                     parts.put(j, new JSONObject().put("type", "media_marker").put("text", MARKER));
                 }
             }
+            applyBudget(paths);
             return new Prepared(messages, paths);
         } catch (Exception error) {
             for (int i = 0; i < paths.length(); i++) new File(paths.optString(i)).delete();
             if (error instanceof IOException) throw (IOException) error;
             throw new IOException("解析多模态请求失败: " + error.getMessage(), error);
+        }
+    }
+
+    // 整轮图片总像素预算：超限则等比压缩，对测试端与后端 HTTP 生效。
+    private void applyBudget(JSONArray paths) throws IOException {
+        int budget = maxImagePixels;
+        if (budget <= 0 || paths.length() == 0) return;
+        long total = 0;
+        int[] widths = new int[paths.length()];
+        int[] heights = new int[paths.length()];
+        for (int i = 0; i < paths.length(); i++) {
+            int[] size = probe(new File(paths.optString(i)));
+            widths[i] = size[0];
+            heights[i] = size[1];
+            total += (long) size[0] * size[1];
+        }
+        if (total <= budget) return;
+        double scale = Math.sqrt(budget / (double) total);
+        for (int i = 0; i < paths.length(); i++) {
+            if (widths[i] <= 0 || heights[i] <= 0) continue;
+            int targetWidth = Math.max(1, (int) (widths[i] * scale));
+            int targetHeight = Math.max(1, (int) (heights[i] * scale));
+            File scaled = scaleFile(new File(paths.optString(i)), targetWidth, targetHeight);
+            if (scaled != null) {
+                new File(paths.optString(i)).delete();
+                paths.put(i, scaled.getAbsolutePath());
+            }
+        }
+    }
+
+    private static int[] probe(File file) {
+        android.graphics.BitmapFactory.Options options = new android.graphics.BitmapFactory.Options();
+        options.inJustDecodeBounds = true;
+        android.graphics.BitmapFactory.decodeFile(file.getAbsolutePath(), options);
+        return new int[]{options.outWidth, options.outHeight};
+    }
+
+    private File scaleFile(File file, int targetWidth, int targetHeight) throws IOException {
+        int sample = 1;
+        int[] size = probe(file);
+        while ((size[0] / (sample * 2)) * (size[1] / (sample * 2)) > (long) targetWidth * targetHeight) sample *= 2;
+        android.graphics.BitmapFactory.Options options = new android.graphics.BitmapFactory.Options();
+        options.inSampleSize = sample;
+        android.graphics.Bitmap decoded = android.graphics.BitmapFactory.decodeFile(file.getAbsolutePath(), options);
+        if (decoded == null) return null;
+        try {
+            android.graphics.Bitmap scaled = decoded.getWidth() == targetWidth && decoded.getHeight() == targetHeight
+                    ? decoded
+                    : android.graphics.Bitmap.createScaledBitmap(decoded, targetWidth, targetHeight, true);
+            File output = File.createTempFile("media-scaled-", ".jpg", cache);
+            try (FileOutputStream stream = new FileOutputStream(output)) {
+                if (!scaled.compress(android.graphics.Bitmap.CompressFormat.JPEG, 92, stream)) {
+                    throw new IOException("图片压缩失败");
+                }
+                stream.getFD().sync();
+            } catch (Exception error) {
+                output.delete();
+                throw error;
+            }
+            if (scaled != decoded) scaled.recycle();
+            decoded.recycle();
+            return output;
+        } catch (Exception error) {
+            decoded.recycle();
+            if (error instanceof IOException) throw (IOException) error;
+            throw new IOException("图片压缩失败: " + error.getMessage(), error);
         }
     }
 
