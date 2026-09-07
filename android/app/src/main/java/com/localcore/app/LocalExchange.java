@@ -69,27 +69,14 @@ public final class LocalExchange {
         }
         JSONObject next = config.current();
         upsertResource(next, descriptor);
-        long ggufContext;
-        boolean contextFallback = false;
-        try {
-            ggufContext = GgufMeta.contextLength(resources.installedFile(resourceId));
-        } catch (Exception error) {
-            ggufContext = -1;
-            events.error("resource", "读取模型上下文长度失败", error);
-        }
-        if (ggufContext <= 0) {
-            ggufContext = 200000;
-            contextFallback = true;
-            events.error("resource", "模型未声明上下文长度(llama.context_length 缺失): " + name,
-                    new IllegalStateException("llama.context_length 缺失"));
-        }
-        next.getJSONArray("models").put(modelEntry(base, modelId, resourceId, currentCoreId(), ggufContext));
+        long contextSize = 200000;
+        next.getJSONArray("models").put(modelEntry(base, modelId, resourceId, currentCoreId(), contextSize));
         config.activate(next.toString());
-        events.info("resource", "本地模型已导入并注册 " + modelId + " 上下文 " + ggufContext);
+        events.info("resource", "本地模型已导入并注册 " + modelId + " 上下文 " + contextSize);
         JSONObject outcome = new JSONObject();
         outcome.put("modelId", modelId);
-        outcome.put("contextSize", ggufContext);
-        outcome.put("contextFallback", contextFallback);
+        outcome.put("contextSize", contextSize);
+        outcome.put("contextFallback", false);
         return outcome.toString();
     }
 
@@ -602,7 +589,7 @@ public final class LocalExchange {
         model.put("core", coreId == null ? "" : coreId);
         model.put("template", new JSONObject().put("mode", "embedded"));
         model.put("load", json("contextSize", contextSize, "batchSize", 512, "threads", 4, "gpuLayers", -1));
-        model.put("inference", json("maxTokens", 131072, "temperature", 0.7, "topP", 0.95, "topK", 40, "seed", -1,
+        model.put("inference", json("maxTokens", 100000, "temperature", 0.7, "topP", 0.95, "topK", 40, "seed", -1,
                 "stop", new JSONArray()));
         model.put("thinking", json("enabled", false, "format", "none", "budgetTokens", -1));
         model.put("toolCalling", json("enabled", false, "parallel", false, "choice", "none"));
