@@ -158,6 +158,14 @@ class BackendModule(private val reactContext: ReactApplicationContext) :
   }
 
   @ReactMethod
+  fun addListener(eventName: String) {
+  }
+
+  @ReactMethod
+  fun removeListeners(count: Int) {
+  }
+
+  @ReactMethod
   fun reply(requestId: Double, payload: String) {
     RuntimeManager.onReply(requestId.toInt(), payload)
   }
