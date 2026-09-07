@@ -137,19 +137,21 @@ class BackendModule(private val reactContext: ReactApplicationContext) :
   }
 
   @ReactMethod
-  fun chatStream(modelId: String, prompt: String, imageUriString: String?, promise: Promise) {
+  fun chatStream(modelId: String, prompt: String, imageUriString: String?, maxImagePixels: Int?, promise: Promise) {
     runAsync(promise, "CHAT_FAILED") {
       if (imageUriString == null) {
         streamChat(modelId, prompt, null)
       } else {
         // MediaResolver 只接受 data:base64 或 URL 能直接打开的地址，content:// 必须先落到缓存文件再转 file://。
+        // 压缩只走测试端这条路，后端 HTTP 服务与模型导入不受影响。
         emitStage("图片拷贝开始")
-        val imageFile = copyUriToCache(Uri.parse(imageUriString))
+        val cached = copyUriToCache(Uri.parse(imageUriString), maxImagePixels)
         try {
-          emitStage("图片拷贝完成" + imageFile.length() + "字节")
-          streamChat(modelId, prompt, imageFile.toURI().toString())
+          if (cached.note != null) emitStage(cached.note)
+          else emitStage("图片拷贝完成" + cached.file.length() + "字节")
+          streamChat(modelId, prompt, cached.file.toURI().toString())
         } finally {
-          imageFile.delete()
+          cached.file.delete()
         }
       }
     }
@@ -193,7 +195,9 @@ class BackendModule(private val reactContext: ReactApplicationContext) :
     }
   }
 
-  private fun copyUriToCache(uri: android.net.Uri): java.io.File {
+  private data class CachedImage(val file: java.io.File, val note: String?)
+
+  private fun copyUriToCache(uri: android.net.Uri, maxPixels: Int?): CachedImage {
     val directory = java.io.File(reactContext.cacheDir, "chat-images")
     if (!directory.isDirectory && !directory.mkdirs()) {
       throw IllegalStateException("无法创建图片缓存目录: " + directory)
@@ -205,7 +209,45 @@ class BackendModule(private val reactContext: ReactApplicationContext) :
         output.fd.sync()
       }
     } ?: throw IllegalStateException("系统未提供图片输入流")
-    return target
+    if (maxPixels == null || maxPixels <= 0) return CachedImage(target, null)
+    return downscaleIfNeeded(target, maxPixels)
+  }
+
+  private fun downscaleIfNeeded(file: java.io.File, maxPixels: Int): CachedImage {
+    val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    android.graphics.BitmapFactory.decodeFile(file.absolutePath, bounds)
+    val width = bounds.outWidth
+    val height = bounds.outHeight
+    if (width <= 0 || height <= 0) return CachedImage(file, null)
+    if (width.toLong() * height.toLong() <= maxPixels) {
+      return CachedImage(file, "图片" + width + "x" + height + "无需压缩")
+    }
+    val scale = kotlin.math.sqrt(maxPixels.toDouble() / (width.toLong() * height.toLong()))
+    val targetWidth = maxOf(1, (width * scale).toInt())
+    val targetHeight = maxOf(1, (height * scale).toInt())
+    var sample = 1
+    while ((width / (sample * 2)) * (height / (sample * 2)) > maxPixels) sample *= 2
+    val options = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
+    val decoded = android.graphics.BitmapFactory.decodeFile(file.absolutePath, options)
+        ?: return CachedImage(file, null)
+    try {
+      val scaled = if (decoded.width == targetWidth && decoded.height == targetHeight) decoded
+      else android.graphics.Bitmap.createScaledBitmap(decoded, targetWidth, targetHeight, true)
+      val output = java.io.File.createTempFile("chat-img-scaled-", ".jpg", file.parentFile)
+      java.io.FileOutputStream(output).use { stream ->
+        if (!scaled.compress(android.graphics.Bitmap.CompressFormat.JPEG, 92, stream)) {
+          throw IllegalStateException("图片压缩失败")
+        }
+        stream.fd.sync()
+      }
+      if (scaled !== decoded) scaled.recycle()
+      decoded.recycle()
+      file.delete()
+      return CachedImage(output, "图片" + width + "x" + height + "压缩到" + targetWidth + "x" + targetHeight)
+    } catch (error: Exception) {
+      decoded.recycle()
+      throw error
+    }
   }
 
   @ReactMethod
