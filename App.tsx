@@ -20,6 +20,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 const {Backend} = NativeModules;
 const chatEvents = new NativeEventEmitter(NativeModules.Backend);
 const CHAT_KEY = 'localcore.chat.v1';
+const SETTINGS_KEY = 'localcore.settings.v1';
+const DEFAULT_BUDGET_PX = 1000000;
 
 type RouteKey = 'chat' | 'core' | 'model' | 'backend' | 'log';
 
@@ -153,6 +155,19 @@ export default function App() {
   const [pendingImage, setPendingImage] = useState<string | null>(null);
   const [viewerUri, setViewerUri] = useState<string | null>(null);
   const [stageMsg, setStageMsg] = useState('');
+  const [chatGate, setChatGate] = useState<{loading: boolean; models: number; loaded: boolean}>({
+    loading: true,
+    models: 0,
+    loaded: false,
+  });
+  const [budgetPx, setBudgetPx] = useState(DEFAULT_BUDGET_PX);
+  const [budgetWan, setBudgetWan] = useState('100');
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [coreRt, setCoreRt] = useState<{phase: string | null; error: string | null; coreId: string | null}>({
+    phase: null,
+    error: null,
+    coreId: null,
+  });
   const [modelList, setModelList] = useState<ModelEntry[] | null>(null);
   const [modelError, setModelError] = useState<string | null>(null);
   const [listLoading, setListLoading] = useState(false);
@@ -198,6 +213,52 @@ export default function App() {
 
   const refreshState = () => run('查询状态', () => Backend.getBackendState());
 
+  const fetchChatState = async () => {
+    setChatGate(g => ({...g, loading: true}));
+    try {
+      const root = JSON.parse(String(await Backend.getBackendState()));
+      const models = root?.config?.models;
+      const count = Array.isArray(models) ? models.length : 0;
+      const phase = root?.runtime?.phase;
+      const mid = root?.runtime?.modelId;
+      setChatGate({
+        loading: false,
+        models: count,
+        loaded: count > 0 && !!mid && (phase === 'model_ready' || phase === 'generating'),
+      });
+    } catch (e: any) {
+      setChatGate({loading: false, models: 0, loaded: false});
+      push('fail', 'FAIL 读取聊天状态 => ' + (e?.message ?? String(e)));
+    }
+  };
+
+  const loadSettings = () => {
+    AsyncStorage.getItem(SETTINGS_KEY)
+      .then(raw => {
+        if (raw == null) return;
+        const px = Number(JSON.parse(raw)?.imageBudgetPx);
+        if (px > 0) {
+          setBudgetPx(Math.round(px));
+          setBudgetWan(String(Math.round(px / 10000)));
+        }
+      })
+      .catch((e: any) => push('fail', 'FAIL 读取图片设置 => ' + (e?.message ?? String(e))));
+  };
+
+  const saveBudget = () => {
+    const wan = Number(budgetWan);
+    if (!Number.isFinite(wan) || wan <= 0) {
+      push('fail', 'FAIL 保存图片设置 => 请输入大于0的数字（万像素）');
+      return;
+    }
+    const px = Math.round(wan * 10000);
+    setBudgetPx(px);
+    setSettingsOpen(false);
+    AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify({imageBudgetPx: px})).catch((e: any) =>
+      push('fail', 'FAIL 保存图片设置 => ' + (e?.message ?? String(e))),
+    );
+  };
+
   const fetchModels = async () => {
     setListLoading(true);
     try {
@@ -235,6 +296,13 @@ export default function App() {
         }
       }
       setCoreInfo(found);
+      const rtErr = root?.runtime?.error;
+      const rtCore = root?.runtime?.coreId;
+      setCoreRt({
+        phase: root?.runtime?.phase ?? null,
+        error: rtErr == null ? null : String(rtErr),
+        coreId: rtCore == null ? null : String(rtCore),
+      });
       setCoreError(null);
     } catch (error: any) {
       const message = error?.message ?? String(error);
@@ -374,6 +442,14 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    loadSettings();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (route === 'chat') {
+      fetchChatState();
+    }
     if (route === 'model') {
       fetchModels();
     }
@@ -437,7 +513,7 @@ export default function App() {
     push('info', '>> ' + label + '：' + prompt + (image ? ' [图片]' : ''));
     (async () => {
       const id = await firstModelId();
-      const raw = String(await Backend.chatStream(id, prompt, image ?? null));
+      const raw = String(await Backend.chatStream(id, prompt, image ?? null, budgetPx));
       return JSON.parse(raw);
     })()
       .then((result: any) => {
@@ -528,6 +604,14 @@ export default function App() {
       lastMsg.role === 'ai' &&
       !!lastMsg.live &&
       lastMsg.text === '';
+    const gateHint = chatGate.loading
+      ? '正在读取状态…'
+      : chatGate.models === 0
+        ? '暂无模型，先去模型屏导入'
+        : chatGate.loaded
+          ? null
+          : '模型未加载，先去模型屏点加载';
+    const inputLocked = !!busy || gateHint !== null;
     return (
     <View style={styles.screen}>
       <ScrollView
@@ -573,8 +657,13 @@ export default function App() {
           </TouchableOpacity>
         </View>
       ) : null}
+      {gateHint !== null ? (
+        <View style={styles.pendingBar}>
+          <Text style={styles.pendingText}>{gateHint}</Text>
+        </View>
+      ) : null}
       <View style={styles.inputBar}>
-        <TouchableOpacity onPress={pickImage} disabled={!!busy} style={styles.iconBtn}>
+        <TouchableOpacity onPress={pickImage} disabled={inputLocked} style={styles.iconBtn}>
           <ImageIcon />
         </TouchableOpacity>
         <TextInput
@@ -584,11 +673,12 @@ export default function App() {
           placeholder="输入消息…"
           placeholderTextColor="#999999"
           multiline
+          editable={!inputLocked}
         />
         <TouchableOpacity
-          style={[styles.sendBtn, ((!draft.trim() && !pendingImage) || busy) && styles.sendBtnDisabled]}
+          style={[styles.sendBtn, ((!draft.trim() && !pendingImage) || inputLocked) && styles.sendBtnDisabled]}
           onPress={sendChat}
-          disabled={(!draft.trim() && !pendingImage) || !!busy}>
+          disabled={(!draft.trim() && !pendingImage) || inputLocked}>
           <Text style={styles.sendText}>发送</Text>
         </TouchableOpacity>
       </View>
@@ -632,15 +722,31 @@ export default function App() {
             <Text style={styles.hint}>点我重试</Text>
           </TouchableOpacity>
         ) : null}
-        {coreInfo !== null ? (
+        {coreInfo !== null && coreRt.phase !== 'error' ? (
           <View style={styles.card}>
             <View style={styles.cardTitleRow}>
               <Text style={styles.cardTitle} numberOfLines={1}>
                 {coreInfo.id}
               </Text>
-              <Text style={styles.tagLoaded}>已激活</Text>
+              {coreRt.coreId === coreInfo.id &&
+              (coreRt.phase === 'model_ready' || coreRt.phase === 'generating') ? (
+                <Text style={styles.tagLoaded}>已激活</Text>
+              ) : null}
             </View>
             <Text style={styles.hint}>版本 {coreInfo.version}</Text>
+          </View>
+        ) : null}
+        {coreInfo !== null && coreRt.phase === 'error' ? (
+          <View style={styles.card}>
+            <View style={styles.cardTitleRow}>
+              <Text style={styles.cardTitle} numberOfLines={1}>
+                {coreInfo.id}
+              </Text>
+              <Text style={styles.tagError}>异常</Text>
+            </View>
+            <Text style={styles.loadErrorText} selectable>
+              {coreRt.error ?? '未知错误'}
+            </Text>
           </View>
         ) : null}
         {coreInfo === null && coreError === null && !coreLoading ? (
@@ -820,9 +926,19 @@ export default function App() {
     }
     if (route === 'model') {
       return (
-        <TouchableOpacity onPress={importModel} style={styles.headerAction}>
-          <Text style={styles.headerActionText}>导入</Text>
-        </TouchableOpacity>
+        <View style={styles.headerBtnRow}>
+          <TouchableOpacity
+            onPress={() => {
+              setBudgetWan(String(Math.round(budgetPx / 10000)));
+              setSettingsOpen(true);
+            }}
+            style={styles.headerAction}>
+            <Text style={styles.headerActionText}>⚙</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={importModel} style={styles.headerAction}>
+            <Text style={styles.headerActionText}>导入</Text>
+          </TouchableOpacity>
+        </View>
       );
     }
     return <View style={styles.headerAction} />;
@@ -873,6 +989,44 @@ export default function App() {
         onRequestClose={() => setViewerUri(null)}
         onLongPress={image => confirmSaveImage(String((image as any)?.uri ?? viewerUri ?? ''))}
       />
+
+      <Modal
+        visible={settingsOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setSettingsOpen(false)}>
+        <Pressable
+          style={styles.settingsMask}
+          onPress={() => {
+            setBudgetWan(String(Math.round(budgetPx / 10000)));
+            setSettingsOpen(false);
+          }}>
+          <Pressable style={styles.settingsCard} onPress={e => e.stopPropagation()}>
+            <Text style={styles.settingsTitle}>图片设置</Text>
+            <Text style={styles.hint}>总分辨率预算（万像素，默认100，超出等比压缩，仅测试端）</Text>
+            <TextInput
+              value={budgetWan}
+              onChangeText={setBudgetWan}
+              keyboardType="numeric"
+              placeholderTextColor="#999999"
+              style={styles.settingsInput}
+            />
+            <View style={styles.rowBtns}>
+              <TouchableOpacity
+                style={[styles.btn, styles.btnFlex]}
+                onPress={() => {
+                  setBudgetWan(String(Math.round(budgetPx / 10000)));
+                  setSettingsOpen(false);
+                }}>
+                <Text>取消</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.btn, styles.btnFlex, styles.btnLast]} onPress={saveBudget}>
+                <Text>保存</Text>
+              </TouchableOpacity>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
 
       {chatMenuOpen ? (
         <Pressable style={styles.menuLayer} onPress={() => setChatMenuOpen(false)}>
@@ -939,6 +1093,19 @@ const styles = StyleSheet.create({
   },
   headerAction: {minWidth: 44, height: 44, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 8},
   headerActionText: {fontSize: 15, color: '#1a3faa'},
+  headerBtnRow: {flexDirection: 'row', alignItems: 'center'},
+  settingsMask: {flex: 1, backgroundColor: 'rgba(0,0,0,0.3)', alignItems: 'center', justifyContent: 'center'},
+  settingsCard: {width: 280, backgroundColor: '#ffffff', borderRadius: 12, padding: 16},
+  settingsTitle: {fontSize: 16, fontWeight: 'bold', color: '#111111', marginBottom: 8},
+  settingsInput: {
+    borderWidth: 1,
+    borderColor: '#dddddd',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    marginVertical: 10,
+    color: '#111111',
+  },
   screen: {flex: 1, backgroundColor: '#ffffff'},
   screenContent: {padding: 16},
   centerBox: {alignItems: 'center', paddingVertical: 24},
