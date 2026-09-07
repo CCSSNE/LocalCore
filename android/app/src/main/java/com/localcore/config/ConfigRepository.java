@@ -23,7 +23,6 @@ public final class ConfigRepository {
 
     private final Context context;
     private final EventLog events;
-    private final ConfigValidator validator = new ConfigValidator();
     private final File activeFile;
     private final List<Listener> listeners = new CopyOnWriteArrayList<>();
     private JSONObject active;
@@ -39,17 +38,11 @@ public final class ConfigRepository {
         try {
             if (!activeFile.isFile()) {
                 try (InputStream input = context.getAssets().open("default_config.json")) {
-                    JSONObject initial = Jsons.parseObject(Jsons.readUtf8(input), "内置初始配置");
-                    initial = validator.normalizeAndValidate(initial);
-                    AtomicFiles.writeUtf8(activeFile, Jsons.format(initial));
+                    AtomicFiles.writeUtf8(activeFile,
+                            Jsons.format(Jsons.parseObject(Jsons.readUtf8(input), "内置初始配置")));
                 }
             }
-            JSONObject stored = Jsons.readObject(activeFile);
-            active = validator.normalizeAndValidate(stored);
-            if (!active.toString().equals(stored.toString())) {
-                AtomicFiles.writeUtf8(activeFile, Jsons.format(active));
-                events.info("config", "有效配置已从 schemaVersion=1 明确迁移到 schemaVersion=2");
-            }
+            active = Jsons.readObject(activeFile);
             events.info("config", "已加载配置 schemaVersion=" + active.optInt("schemaVersion"));
         } catch (Exception error) {
             events.error("config", "有效配置加载失败", error);
@@ -65,32 +58,20 @@ public final class ConfigRepository {
         return Jsons.format(active);
     }
 
-    public JSONObject validate(String text) {
-        JSONObject candidate = Jsons.parseObject(text, "候选配置");
-        return validator.normalizeAndValidate(candidate);
-    }
-
-    public JSONObject validateUpdateManifest(String text) {
-        JSONObject manifest = Jsons.parseObject(text, "更新清单");
-        validator.validateUpdateManifest(manifest);
-        return manifest;
-    }
-
     public void activate(String text) throws IOException {
-        JSONObject candidate = validate(text);
+        JSONObject candidate = Jsons.parseObject(text, "候选配置");
         synchronized (this) {
             AtomicFiles.writeUtf8(activeFile, Jsons.format(candidate));
             active = candidate;
         }
-        events.info("config", "候选配置校验通过并已原子激活");
+        events.info("config", "候选配置已原子激活");
         for (Listener listener : listeners) {
             listener.onConfigActivated(current());
         }
     }
 
     public String readImport(InputStream input) throws IOException {
-        String text = Jsons.readUtf8(input);
-        return Jsons.format(validate(text));
+        return Jsons.format(Jsons.parseObject(Jsons.readUtf8(input), "候选配置"));
     }
 
     public synchronized void exportTo(OutputStream output) throws IOException {

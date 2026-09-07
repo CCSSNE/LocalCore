@@ -167,13 +167,8 @@ int32_t load_model(void * opaque, const char * path, const lc_load_params * para
     try {
         llama_model_params model_params = llama_model_default_params();
         model_params.n_gpu_layers = params->gpu_layers;
-        model_params.check_tensors = true;
         runtime->model = llama_model_load_from_file(path, model_params);
-        if (runtime->model == nullptr) return fail(runtime, -2, "llama.cpp 无法加载或校验 GGUF 模型");
-        if (llama_model_has_encoder(runtime->model)) {
-            unload(runtime);
-            return fail(runtime, -3, "当前核心仅支持 decoder-only GGUF 模型");
-        }
+        if (runtime->model == nullptr) return fail(runtime, -2, "llama.cpp 无法加载 GGUF 模型");
         llama_context_params context_params = llama_context_default_params();
         context_params.n_ctx = params->context_size;
         context_params.n_batch = params->batch_size;

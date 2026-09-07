@@ -82,33 +82,10 @@ Java_com_localcore_runtime_NativeBridge_open(JNIEnv * env, jclass, jstring path_
         throw_java(env, "java/lang/IllegalStateException", "无法加载动态核心 " + path + ": " + dlerror());
         return 0;
     }
-    dlerror();
     auto get_api_v2 = reinterpret_cast<lc_get_runtime_api_v2_fn>(dlsym(library, "localcore_runtime_api_v2"));
-    dlerror();
     auto get_api_v1 = reinterpret_cast<lc_get_runtime_api_v1_fn>(dlsym(library, "localcore_runtime_api_v1"));
-    const char * symbol_error = dlerror();
-    if (symbol_error != nullptr || get_api_v1 == nullptr) {
-        std::string message = "动态核心缺少 localcore_runtime_api_v1: ";
-        message += symbol_error == nullptr ? "未知 dlsym 错误" : symbol_error;
-        dlclose(library);
-        throw_java(env, "java/lang/IllegalStateException", message);
-        return 0;
-    }
     const lc_runtime_api_v1 * api = get_api_v1();
     const lc_runtime_api_v2 * api2 = get_api_v2 == nullptr ? nullptr : get_api_v2();
-    if (api == nullptr || api->abi_version != LOCALCORE_RUNTIME_ABI_V1
-            || api->struct_size < sizeof(lc_runtime_api_v1)) {
-        std::string message = "动态核心基础 ABI 不兼容，宿主要求 v1";
-        dlclose(library);
-        throw_java(env, "java/lang/IllegalStateException", message);
-        return 0;
-    }
-    if (api2 != nullptr && (api2->abi_version != LOCALCORE_RUNTIME_ABI_V2
-            || api2->struct_size < sizeof(lc_runtime_api_v2) || api2->base != api)) {
-        dlclose(library);
-        throw_java(env, "java/lang/IllegalStateException", "动态核心声明了无效的 v2 ABI");
-        return 0;
-    }
     void * runtime = api->create(log_callback, nullptr);
     if (runtime == nullptr) {
         dlclose(library);

@@ -110,7 +110,7 @@ public final class UpdateManager {
         State current = state;
         if (resource.status == ResourceState.Status.FAILED && current.phase == Phase.DOWNLOADING) {
             setState(new State(Phase.FAILED, current.version, resource.error == null
-                    ? "候选配置下载或校验失败，旧版本继续生效" : resource.error));
+                    ? "候选配置下载失败，旧版本继续生效" : resource.error));
             events.error("update", "候选配置安装失败，旧版本继续生效: " + resource.id, null);
         }
     }
@@ -120,7 +120,7 @@ public final class UpdateManager {
         String manifestUrl = policy.optString("manifestUrl");
         if (manifestUrl.isEmpty()) throw new IllegalStateException("更新清单 URL 为空");
         setState(new State(Phase.CHECKING, null, null));
-        JSONObject manifest = config.validateUpdateManifest(fetch(manifestUrl));
+        JSONObject manifest = Jsons.parseObject(fetch(manifestUrl), "更新清单");
         JSONObject descriptor = new JSONObject(manifest.optJSONObject("configuration").toString());
         String id = descriptor.optString("id");
         String version = descriptor.optString("version");
@@ -136,7 +136,7 @@ public final class UpdateManager {
         resources.installConfiguration(descriptor, file -> {
             candidate = file;
             setState(new State(Phase.READY, version, null));
-            events.info("update", "候选配置已下载并通过完整性校验 " + version);
+            events.info("update", "候选配置已下载 " + version);
             if (config.current().optJSONObject("updates").optBoolean("autoActivate")) activate();
         });
     }

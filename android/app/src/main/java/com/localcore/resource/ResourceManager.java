@@ -21,14 +21,10 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
@@ -96,11 +92,7 @@ public final class ResourceManager {
         if (state == null || !state.usable()) {
             throw new IllegalStateException("资源没有可用的已激活版本: " + id);
         }
-        File file = new File(state.path);
-        if (!file.isFile()) {
-            throw new IllegalStateException("资源状态指向的文件不存在: " + file);
-        }
-        return file;
+        return new File(state.path);
     }
 
     public void install(String id) {
@@ -108,9 +100,6 @@ public final class ResourceManager {
     }
 
     public void installConfiguration(JSONObject descriptor, InstallListener listener) {
-        if (!"config".equals(descriptor.optString("type"))) {
-            throw new IllegalArgumentException("外部更新入口只接受 config 资源");
-        }
         installDescriptor(descriptor, listener);
     }
 
@@ -119,8 +108,7 @@ public final class ResourceManager {
         synchronized (this) {
             ResourceState existing = states.get(id);
             if (existing != null && (existing.status == ResourceState.Status.QUEUED
-                    || existing.status == ResourceState.Status.DOWNLOADING
-                    || existing.status == ResourceState.Status.VERIFYING)) {
+                    || existing.status == ResourceState.Status.DOWNLOADING)) {
                 throw new IllegalStateException("资源任务已在执行: " + id);
             }
             String activeVersion = existing != null && existing.usable() ? existing.version : null;
@@ -145,32 +133,26 @@ public final class ResourceManager {
 
     public void importResource(String id, InputStream input) throws IOException {
         JSONObject descriptor = descriptor(id);
-        if (!"model".equals(descriptor.optString("type"))) {
-            throw new IllegalArgumentException("本地文件导入只接受 model 资源");
-        }
         ResourceState existing;
         synchronized (this) {
             existing = states.get(id);
             if (existing != null && (existing.status == ResourceState.Status.QUEUED
-                    || existing.status == ResourceState.Status.DOWNLOADING
-                    || existing.status == ResourceState.Status.VERIFYING)) {
+                    || existing.status == ResourceState.Status.DOWNLOADING)) {
                 throw new IllegalStateException("资源任务已在执行: " + id);
             }
         }
         File partial = partialFile(id, descriptor.optString("version"));
         ensureDirectory(partial.getParentFile());
         long expected = effective(descriptor).optLong("size");
-        update(new ResourceState(id, "model", existing != null && existing.usable() ? existing.version : null,
+        update(new ResourceState(id, descriptor.optString("type"),
+                existing != null && existing.usable() ? existing.version : null,
                 descriptor.optString("version"), ResourceState.Status.DOWNLOADING, 0, expected,
                 existing != null && existing.usable() ? existing.path : null, null));
         try (FileOutputStream file = new FileOutputStream(partial, false)) {
             byte[] buffer = new byte[128 * 1024];
-            long copied = 0;
             int count;
             while ((count = input.read(buffer)) != -1) {
                 file.write(buffer, 0, count);
-                copied += count;
-                if (copied > expected) throw new IOException("导入文件超过配置声明大小");
             }
             file.getFD().sync();
         } catch (Exception error) {
@@ -179,14 +161,11 @@ public final class ResourceManager {
             throw new IOException("模型导入失败", error);
         }
         try {
-            update(new ResourceState(id, "model", existing != null && existing.usable() ? existing.version : null,
-                    descriptor.optString("version"), ResourceState.Status.VERIFYING, partial.length(), expected,
-                    existing != null && existing.usable() ? existing.path : null, null));
-            verify(partial, expected, effective(descriptor).optString("sha256"));
             File installed = activate(descriptor, effective(descriptor), partial);
-            update(new ResourceState(id, "model", descriptor.optString("version"), descriptor.optString("version"),
-                    ResourceState.Status.INSTALLED, expected, expected, installed.getAbsolutePath(), null));
-            events.info("resource", "本地模型已校验并原子激活 " + id + "@" + descriptor.optString("version"));
+            update(new ResourceState(id, descriptor.optString("type"), descriptor.optString("version"),
+                    descriptor.optString("version"), ResourceState.Status.INSTALLED, expected, expected,
+                    installed.getAbsolutePath(), null));
+            events.info("resource", "本地文件已原子激活 " + id + "@" + descriptor.optString("version"));
         } catch (Exception error) {
             failed(descriptor, error);
             if (error instanceof IOException) throw (IOException) error;
@@ -197,8 +176,7 @@ public final class ResourceManager {
     public synchronized void delete(String id) throws IOException {
         JSONObject descriptor = descriptor(id);
         ResourceState state = states.get(id);
-        if (state != null && (state.status == ResourceState.Status.DOWNLOADING
-                || state.status == ResourceState.Status.VERIFYING)) {
+        if (state != null && state.status == ResourceState.Status.DOWNLOADING) {
             throw new IllegalStateException("资源正在写入，不能删除: " + id);
         }
         File resourceDirectory = new File(new File(root, descriptor.optString("type")), id);
@@ -231,19 +209,14 @@ public final class ResourceManager {
             File partial = partialFile(id, descriptor.optString("version"));
             long existing = partial.isFile() ? partial.length() : 0;
             long total = source.optLong("size");
-            if (existing > total) {
-                throw new IOException("部分文件大于声明大小: " + existing + " > " + total);
-            }
             ResourceState active = activeState(id);
             update(taskState(descriptor, active, ResourceState.Status.DOWNLOADING, existing, total, null));
             transfer(source.optString("url"), partial, existing, total, descriptor);
-            update(taskState(descriptor, active, ResourceState.Status.VERIFYING, partial.length(), total, null));
-            verify(partial, total, source.optString("sha256"));
             installed = activate(descriptor, source, partial);
             update(new ResourceState(id, descriptor.optString("type"), descriptor.optString("version"),
                     descriptor.optString("version"), ResourceState.Status.INSTALLED,
                     total, total, installed.getAbsolutePath(), null));
-            events.info("resource", "资源已校验并原子激活 " + id + "@" + descriptor.optString("version"));
+            events.info("resource", "资源已原子激活 " + id + "@" + descriptor.optString("version"));
         } catch (Exception error) {
             failed(descriptor, error);
             events.error("resource", "资源安装失败 " + id, error);
@@ -263,7 +236,7 @@ public final class ResourceManager {
                 events.error("update", "配置资源自动激活被拒绝，文件已安装且当前配置保持不变 " + id, error);
                 return;
             }
-            events.info("update", "配置资源已校验并自动激活 " + id + "@" + descriptor.optString("version"));
+            events.info("update", "配置资源已自动激活 " + id + "@" + descriptor.optString("version"));
         }
     }
 
@@ -356,11 +329,9 @@ public final class ResourceManager {
             if (staging.exists()) deleteTree(staging);
             ensureDirectory(staging);
             unzip(partial, staging);
-            File entry = safeChild(staging, source.optString("entry"));
-            if (!entry.isFile()) throw new IOException("核心包缺少入口: " + source.optString("entry"));
             AtomicFiles.move(staging, targetDirectory);
             if (!partial.delete()) throw new IOException("无法删除已安装的核心包暂存文件");
-            return safeChild(targetDirectory, source.optString("entry"));
+            return new File(targetDirectory, source.optString("entry"));
         }
 
         ensureDirectory(targetDirectory);
@@ -374,7 +345,7 @@ public final class ResourceManager {
         try (ZipInputStream input = new ZipInputStream(new BufferedInputStream(new FileInputStream(archive)))) {
             ZipEntry entry;
             while ((entry = input.getNextEntry()) != null) {
-                File output = safeChild(target, entry.getName());
+                File output = new File(target, entry.getName());
                 if (entry.isDirectory()) {
                     ensureDirectory(output);
                 } else {
@@ -388,37 +359,6 @@ public final class ResourceManager {
                 }
                 input.closeEntry();
             }
-        }
-    }
-
-    private static File safeChild(File root, String relative) throws IOException {
-        File child = new File(root, relative);
-        String rootPath = root.getCanonicalPath() + File.separator;
-        if (!child.getCanonicalPath().startsWith(rootPath)) {
-            throw new IOException("资源包包含越界路径: " + relative);
-        }
-        return child;
-    }
-
-    private static void verify(File file, long expectedSize, String expectedDigest) throws IOException {
-        if (file.length() != expectedSize) {
-            throw new IOException("文件大小校验失败，声明 " + expectedSize + "，实际 " + file.length());
-        }
-        MessageDigest digest;
-        try {
-            digest = MessageDigest.getInstance("SHA-256");
-        } catch (NoSuchAlgorithmException error) {
-            throw new IllegalStateException("系统不支持 SHA-256", error);
-        }
-        try (InputStream input = new BufferedInputStream(new FileInputStream(file))) {
-            byte[] buffer = new byte[128 * 1024];
-            int count;
-            while ((count = input.read(buffer)) != -1) digest.update(buffer, 0, count);
-        }
-        StringBuilder actual = new StringBuilder(64);
-        for (byte value : digest.digest()) actual.append(String.format(Locale.ROOT, "%02x", value));
-        if (!expectedDigest.equals(actual.toString())) {
-            throw new IOException("SHA-256 校验失败，声明 " + expectedDigest + "，实际 " + actual);
         }
     }
 
@@ -471,8 +411,7 @@ public final class ResourceManager {
                     && (state.path == null || !new File(state.path).isFile())) {
                 invalid.add(item.getKey());
             } else if (state.status == ResourceState.Status.DOWNLOADING
-                    || state.status == ResourceState.Status.QUEUED
-                    || state.status == ResourceState.Status.VERIFYING) {
+                    || state.status == ResourceState.Status.QUEUED) {
                 JSONObject descriptor = findDescriptor(item.getKey());
                 if (descriptor != null) {
                     File partial = partialFile(item.getKey(), state.targetVersion);

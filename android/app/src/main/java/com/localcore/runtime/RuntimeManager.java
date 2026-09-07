@@ -80,12 +80,6 @@ public final class RuntimeManager {
             synchronized (this) {
                 closeLocked();
                 handle = NativeBridge.open(core.getAbsolutePath());
-                int actualRuntimeApi = NativeBridge.runtimeApi(handle);
-                int requiredRuntimeApi = model.optJSONObject("requirements").optInt("runtimeApi");
-                if (actualRuntimeApi != requiredRuntimeApi) {
-                    throw new IllegalStateException("动态核心 runtimeApi=" + actualRuntimeApi
-                            + "，模型明确要求 runtimeApi=" + requiredRuntimeApi);
-                }
                 JSONObject load = model.optJSONObject("load");
                 NativeBridge.loadModel(handle, modelFile.getAbsolutePath(),
                         load.optInt("contextSize"), load.optInt("batchSize"),

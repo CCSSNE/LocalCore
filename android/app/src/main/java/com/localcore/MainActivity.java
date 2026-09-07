@@ -203,10 +203,6 @@ public final class MainActivity extends Activity {
         configCard.addView(configEditor, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         configCard.addView(buttonRow(
-                action("校验", () -> runAction("校验配置", () -> {
-                    graph.config.validate(configEditor.getText().toString());
-                    toast("配置校验通过");
-                })),
                 action("原子激活", () -> runAction("激活配置", () -> {
                     graph.config.activate(configEditor.getText().toString());
                     configEditor.setText(graph.config.currentText());
@@ -534,7 +530,7 @@ public final class MainActivity extends Activity {
                 if (input == null) throw new IllegalStateException("系统未提供配置输入流");
                 configEditor.setText(graph.config.readImport(input));
                 configEditor.requestFocus();
-                toast("外部配置已校验，请检查后原子激活");
+                toast("外部配置已载入，请检查后原子激活");
             }
         });
     }
@@ -565,7 +561,7 @@ public final class MainActivity extends Activity {
                 try (InputStream input = getContentResolver().openInputStream(uri)) {
                     if (input == null) throw new IllegalStateException("系统未提供导入流");
                     configEditor.setText(graph.config.readImport(input));
-                    toast("导入内容已校验，请检查后原子激活");
+                    toast("导入内容已载入，请检查后原子激活");
                 }
             } else if (requestCode == IMPORT_MODEL) {
                 String id = pendingImportResourceId;
