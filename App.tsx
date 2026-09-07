@@ -198,6 +198,7 @@ export default function App() {
   const chatScroll = useRef<ScrollView | null>(null);
   const logScroll = useRef<ScrollView | null>(null);
   const chatScrollSig = useRef<string>('');
+  const phaseClocks = useRef<Record<string, {t0: number}>>({});
   // 是否跟随输出追到最下面：用户主动上滑即停，滑回底部再恢复。
   const followOutput = useRef(true);
   // 从测试页小横杠跳去模型页后，加载成功自动跳回测试页。只用于这一种情况。
@@ -476,6 +477,13 @@ export default function App() {
       if (!phase) return;
       const done = Number(event?.done ?? 0);
       const total = Number(event?.total ?? 0);
+      const now = Date.now();
+      let clk = phaseClocks.current[phase];
+      if (!clk) {
+        clk = {t0: now};
+        phaseClocks.current[phase] = clk;
+      }
+      const elapsed = (now - clk.t0) / 1000;
       const labels: Record<string, string> = {
         context_prepare: '正在准备文字',
         image_prepare: '正在读取和预处理图片',
@@ -484,7 +492,9 @@ export default function App() {
         image_context: '正在解码图片（上下文计算）',
       };
       const pct = total > 0 ? ` ${((done / total) * 100).toFixed(2)}%` : '';
-      const msg = `${labels[phase] ?? phase}${pct}`;
+      const speedTxt = done > 0 && elapsed > 0 ? `${(done / elapsed).toFixed(2)}t/s` : '--';
+      const mspTxt = done > 0 && elapsed > 0 ? `${((elapsed * 1000) / done).toFixed(2)}ms/t` : '--';
+      const msg = `${labels[phase] ?? phase} ${done}/${total}${pct} ${speedTxt} ${mspTxt}`;
       progressStarted.current = true;
       setProgressMsg(msg);
       push('info', '·· ' + msg);
@@ -609,6 +619,7 @@ export default function App() {
     setMessages(prev => [...prev, {role: 'ai', text: '', live: true}]);
     setStageMsg('');
     setProgressMsg('');
+    phaseClocks.current = {};
     prefillComplete.current = false;
     progressStarted.current = false;
     const label = '聊天推理';
