@@ -65,8 +65,9 @@ public final class LocalExchange {
         }
         if (ggufContext <= 0) {
             ggufContext = Integer.MAX_VALUE;
-            contextNote = "模型未声明上下文长度，已回退无限制，显存不足会在加载时直接报错";
-            events.error("resource", "模型未声明上下文长度(llama.context_length 缺失): " + name);
+            contextNote = "模型未声明上下文，已回退无限制，显存不足会在加载时直接报错";
+            events.error("resource", "模型未声明上下文长度(llama.context_length 缺失): " + name,
+                    new IllegalStateException("llama.context_length 缺失"));
         } else {
             contextNote = "上下文 " + ggufContext;
         }
