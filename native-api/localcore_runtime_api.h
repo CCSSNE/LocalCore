@@ -9,7 +9,9 @@
 extern "C" {
 #endif
 
-#define LOCALCORE_RUNTIME_ABI_VERSION 1u
+#define LOCALCORE_RUNTIME_ABI_V1 1u
+#define LOCALCORE_RUNTIME_ABI_V2 2u
+#define LOCALCORE_RUNTIME_ABI_VERSION LOCALCORE_RUNTIME_ABI_V2
 
 typedef struct lc_chat_message {
     const char * role;
@@ -58,6 +60,20 @@ typedef struct lc_runtime_api_v1 {
 
 typedef const lc_runtime_api_v1 * (*lc_get_runtime_api_v1_fn)(void);
 
+typedef struct lc_runtime_api_v2 {
+    uint32_t struct_size;
+    uint32_t abi_version;
+    const lc_runtime_api_v1 * base;
+    int32_t (*prepare_chat)(void * runtime, const char * jinja_template, const char * request_json,
+            char * output, int32_t output_size);
+    int32_t (*generate_chat)(void * runtime, const char * prompt, const lc_generation_params * params,
+            const char * chat_plan_json, lc_token_callback callback, void * user_data);
+    int32_t (*parse_chat_output)(void * runtime, const char * chat_plan_json, const char * generated,
+            char * output, int32_t output_size);
+} lc_runtime_api_v2;
+
+typedef const lc_runtime_api_v2 * (*lc_get_runtime_api_v2_fn)(void);
+
 #if defined(_WIN32)
 #define LOCALCORE_RUNTIME_EXPORT __declspec(dllexport)
 #else
@@ -65,10 +81,10 @@ typedef const lc_runtime_api_v1 * (*lc_get_runtime_api_v1_fn)(void);
 #endif
 
 LOCALCORE_RUNTIME_EXPORT const lc_runtime_api_v1 * localcore_runtime_api_v1(void);
+LOCALCORE_RUNTIME_EXPORT const lc_runtime_api_v2 * localcore_runtime_api_v2(void);
 
 #if defined(__cplusplus)
 }
 #endif
 
 #endif
-

@@ -20,7 +20,7 @@ add_subdirectory("${LLAMA_CPP_SOURCE_DIR}" llama.cpp EXCLUDE_FROM_ALL)
 
 add_library(localcore_runtime SHARED src/runtime.cpp)
 target_compile_features(localcore_runtime PRIVATE cxx_std_17)
-target_compile_definitions(localcore_runtime PRIVATE LOCALCORE_RUNTIME_VERSION="llama-b10256-lc1")
+target_compile_definitions(localcore_runtime PRIVATE LOCALCORE_RUNTIME_VERSION="llama-b10256-lc2")
 target_compile_options(localcore_runtime PRIVATE -Wall -Wextra -Werror -fvisibility=hidden)
 target_include_directories(localcore_runtime PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/../native-api"

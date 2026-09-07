@@ -29,11 +29,19 @@ public final class RuntimeManager {
         public final int promptTokens;
         public final int completionTokens;
         public final String text;
+        public final JSONObject message;
+        public final boolean structured;
 
         public Result(int promptTokens, int completionTokens, String text) {
+            this(promptTokens, completionTokens, text, null, false);
+        }
+
+        public Result(int promptTokens, int completionTokens, String text, JSONObject message, boolean structured) {
             this.promptTokens = promptTokens;
             this.completionTokens = completionTokens;
             this.text = text;
+            this.message = message;
+            this.structured = structured;
         }
     }
 
@@ -72,6 +80,12 @@ public final class RuntimeManager {
             synchronized (this) {
                 closeLocked();
                 handle = NativeBridge.open(core.getAbsolutePath());
+                int actualRuntimeApi = NativeBridge.runtimeApi(handle);
+                int requiredRuntimeApi = model.optJSONObject("requirements").optInt("runtimeApi");
+                if (actualRuntimeApi != requiredRuntimeApi) {
+                    throw new IllegalStateException("动态核心 runtimeApi=" + actualRuntimeApi
+                            + "，模型明确要求 runtimeApi=" + requiredRuntimeApi);
+                }
                 JSONObject load = model.optJSONObject("load");
                 NativeBridge.loadModel(handle, modelFile.getAbsolutePath(),
                         load.optInt("contextSize"), load.optInt("batchSize"),
@@ -116,24 +130,40 @@ public final class RuntimeManager {
                 activeHandle = handle;
                 model = loadedModel;
             }
+            if (messages.length() == 0) throw new IllegalArgumentException("messages 不能为空");
+            String template = template(model);
+            if (NativeBridge.runtimeApi(activeHandle) >= 2) {
+                JSONObject effective = effectiveChatRequest(model, request);
+                JSONObject plan = Jsons.parseObject(NativeBridge.prepareChat(activeHandle, effective.toString(), template), "聊天计划");
+                String prompt = plan.optString("prompt");
+                boolean structured = plan.optBoolean("parseToolCalls") || !"none".equals(plan.optString("reasoningFormat"));
+                Result generated = generateLocked(activeHandle, model, prompt, effective,
+                        structured ? null : consumer, plan);
+                JSONObject message = Jsons.parseObject(NativeBridge.parseChatOutput(activeHandle,
+                        plan.toString(), generated.text), "助手消息");
+                return new Result(generated.promptTokens, generated.completionTokens, generated.text, message, structured);
+            }
             List<String> roles = new ArrayList<>();
             List<String> contents = new ArrayList<>();
             for (int i = 0; i < messages.length(); i++) {
                 JSONObject message = messages.optJSONObject(i);
-                if (message == null) throw new IllegalArgumentException("messages[" + i + "] 必须是对象");
-                String role = message.optString("role", "");
-                Object contentValue = message.opt("content");
-                if (role.isEmpty() || !(contentValue instanceof String)) {
-                    throw new IllegalArgumentException("messages[" + i + "] 必须包含字符串 role 和 content");
+                Object content = message == null ? null : message.opt("content");
+                if (message == null || message.optString("role").isEmpty() || !(content instanceof String)) {
+                    throw new IllegalArgumentException("runtimeApi=1 只支持字符串 role/content 消息");
                 }
-                roles.add(role);
-                contents.add((String) contentValue);
+                roles.add(message.optString("role"));
+                contents.add((String) content);
             }
-            if (roles.isEmpty()) throw new IllegalArgumentException("messages 不能为空");
-            String template = template(model);
-            String prompt = NativeBridge.applyChatTemplate(activeHandle,
-                    roles.toArray(new String[0]), contents.toArray(new String[0]), template);
-            return generateLocked(activeHandle, model, prompt, request, consumer);
+            if (request.has("tools") || request.has("reasoning_format") || request.has("reasoning_effort")) {
+                throw new IllegalArgumentException("工具调用和 thinking 要求 runtimeApi=2");
+            }
+            String prompt = NativeBridge.applyChatTemplate(activeHandle, roles.toArray(new String[0]),
+                    contents.toArray(new String[0]), template);
+            Result generated = generateLocked(activeHandle, model, prompt, request, consumer, null);
+            JSONObject message = new JSONObject();
+            put(message, "role", "assistant");
+            put(message, "content", generated.text);
+            return new Result(generated.promptTokens, generated.completionTokens, generated.text, message, false);
         } catch (RuntimeException error) {
             RuntimeState before = state();
             setState(new RuntimeState(RuntimeState.Phase.ERROR, before.coreId, before.coreVersion,
@@ -156,7 +186,7 @@ public final class RuntimeManager {
                 activeHandle = handle;
                 model = loadedModel;
             }
-            return generateLocked(activeHandle, model, prompt, request, consumer);
+            return generateLocked(activeHandle, model, prompt, request, consumer, null);
         } catch (RuntimeException error) {
             RuntimeState before = state();
             setState(new RuntimeState(RuntimeState.Phase.ERROR, before.coreId, before.coreVersion,
@@ -176,7 +206,7 @@ public final class RuntimeManager {
     public void removeListener(Listener listener) { listeners.remove(listener); }
 
     private Result generateLocked(long activeHandle, JSONObject model, String prompt,
-                                  JSONObject request, TokenConsumer consumer) {
+                                   JSONObject request, TokenConsumer consumer, JSONObject chatPlan) {
         int promptTokens = NativeBridge.tokenCount(activeHandle, prompt);
         JSONObject defaults = model.optJSONObject("inference");
         int maxTokens = request.has("max_tokens") ? request.optInt("max_tokens", -1) : defaults.optInt("maxTokens");
@@ -188,14 +218,21 @@ public final class RuntimeManager {
                 || seed < -1 || seed > 0xffffffffL) {
             throw new IllegalArgumentException("请求中的推理参数超出有效范围");
         }
-        String[] stops = stops(request.has("stop") ? request.opt("stop") : defaults.optJSONArray("stop"));
+        JSONArray mergedStops = new JSONArray();
+        String[] configuredStops = stops(request.has("stop") ? request.opt("stop") : defaults.optJSONArray("stop"));
+        for (String stop : configuredStops) mergedStops.put(stop);
+        if (chatPlan != null) {
+            JSONArray additional = chatPlan.optJSONArray("additionalStops");
+            for (int i = 0; additional != null && i < additional.length(); i++) mergedStops.put(additional.optString(i));
+        }
+        String[] stopValues = stops(mergedStops);
         RuntimeState before = state();
         setState(new RuntimeState(RuntimeState.Phase.GENERATING, before.coreId, before.coreVersion,
                 model.optString("id"), null));
         StringBuilder text = new StringBuilder();
         final IOException[] callbackError = new IOException[1];
         int generated = NativeBridge.generate(activeHandle, prompt, maxTokens, (float) temperature,
-                (float) topP, topK, seed, stops, token -> {
+                (float) topP, topK, seed, stopValues, chatPlan == null ? null : chatPlan.toString(), token -> {
                     String decoded = new String(token, java.nio.charset.StandardCharsets.UTF_8);
                     text.append(decoded);
                     try {
@@ -209,6 +246,29 @@ public final class RuntimeManager {
         setState(new RuntimeState(RuntimeState.Phase.MODEL_READY, before.coreId, before.coreVersion,
                 model.optString("id"), null));
         return new Result(promptTokens, generated, text.toString());
+    }
+
+    private JSONObject effectiveChatRequest(JSONObject model, JSONObject request) {
+        JSONObject effective = Jsons.parseObject(request.toString(), "聊天请求");
+        JSONObject tools = model.optJSONObject("toolCalling");
+        JSONArray requestedTools = effective.optJSONArray("tools");
+        if (requestedTools != null && requestedTools.length() > 0 && !tools.optBoolean("enabled")) {
+            throw new IllegalArgumentException("模型配置未启用工具调用");
+        }
+        if (requestedTools != null && requestedTools.length() > 0) {
+            if (!effective.has("tool_choice")) put(effective, "tool_choice", tools.optString("choice"));
+            if (!effective.has("parallel_tool_calls")) put(effective, "parallel_tool_calls", tools.optBoolean("parallel"));
+        }
+        JSONObject thinking = model.optJSONObject("thinking");
+        if (!effective.has("reasoning_format")) put(effective, "reasoning_format", thinking.optString("format"));
+        if (!effective.has("enable_thinking")) put(effective, "enable_thinking", thinking.optBoolean("enabled"));
+        if (!effective.has("reasoning_budget_tokens")) put(effective, "reasoning_budget_tokens", thinking.optInt("budgetTokens"));
+        return effective;
+    }
+
+    private static void put(JSONObject target, String key, Object value) {
+        try { target.put(key, value); }
+        catch (org.json.JSONException error) { throw new IllegalStateException("无法写入请求字段 " + key, error); }
     }
 
     private String template(JSONObject model) {

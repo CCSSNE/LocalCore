@@ -48,7 +48,7 @@ foreach ($targetAbi in $abis) {
     if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force }
     New-Item -ItemType Directory -Force -Path $stage | Out-Null
     Copy-Item -LiteralPath $library.FullName -Destination (Join-Path $stage 'liblocalcore_runtime.so')
-    $archive = Join-Path $packageRoot "localcore-runtime-llama-b10256-lc1-$targetAbi.zip"
+    $archive = Join-Path $packageRoot "localcore-runtime-llama-b10256-lc2-$targetAbi.zip"
     if (Test-Path -LiteralPath $archive) { Remove-Item -LiteralPath $archive -Force }
     Compress-Archive -LiteralPath (Join-Path $stage 'liblocalcore_runtime.so') -DestinationPath $archive -CompressionLevel Optimal
     $hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()

@@ -16,6 +16,7 @@ constexpr const char * TAG = "LocalCoreNative";
 struct HostRuntime {
     void * library = nullptr;
     const lc_runtime_api_v1 * api = nullptr;
+    const lc_runtime_api_v2 * api2 = nullptr;
     void * runtime = nullptr;
 };
 
@@ -82,22 +83,30 @@ Java_com_localcore_runtime_NativeBridge_open(JNIEnv * env, jclass, jstring path_
         return 0;
     }
     dlerror();
-    auto get_api = reinterpret_cast<lc_get_runtime_api_v1_fn>(dlsym(library, "localcore_runtime_api_v1"));
+    auto get_api_v2 = reinterpret_cast<lc_get_runtime_api_v2_fn>(dlsym(library, "localcore_runtime_api_v2"));
+    dlerror();
+    auto get_api_v1 = reinterpret_cast<lc_get_runtime_api_v1_fn>(dlsym(library, "localcore_runtime_api_v1"));
     const char * symbol_error = dlerror();
-    if (symbol_error != nullptr || get_api == nullptr) {
+    if (symbol_error != nullptr || get_api_v1 == nullptr) {
         std::string message = "动态核心缺少 localcore_runtime_api_v1: ";
         message += symbol_error == nullptr ? "未知 dlsym 错误" : symbol_error;
         dlclose(library);
         throw_java(env, "java/lang/IllegalStateException", message);
         return 0;
     }
-    const lc_runtime_api_v1 * api = get_api();
-    if (api == nullptr || api->abi_version != LOCALCORE_RUNTIME_ABI_VERSION
+    const lc_runtime_api_v1 * api = get_api_v1();
+    const lc_runtime_api_v2 * api2 = get_api_v2 == nullptr ? nullptr : get_api_v2();
+    if (api == nullptr || api->abi_version != LOCALCORE_RUNTIME_ABI_V1
             || api->struct_size < sizeof(lc_runtime_api_v1)) {
-        std::string message = "动态核心 ABI 不兼容，宿主要求 "
-                + std::to_string(LOCALCORE_RUNTIME_ABI_VERSION);
+        std::string message = "动态核心基础 ABI 不兼容，宿主要求 v1";
         dlclose(library);
         throw_java(env, "java/lang/IllegalStateException", message);
+        return 0;
+    }
+    if (api2 != nullptr && (api2->abi_version != LOCALCORE_RUNTIME_ABI_V2
+            || api2->struct_size < sizeof(lc_runtime_api_v2) || api2->base != api)) {
+        dlclose(library);
+        throw_java(env, "java/lang/IllegalStateException", "动态核心声明了无效的 v2 ABI");
         return 0;
     }
     void * runtime = api->create(log_callback, nullptr);
@@ -109,6 +118,7 @@ Java_com_localcore_runtime_NativeBridge_open(JNIEnv * env, jclass, jstring path_
     auto result = std::make_unique<HostRuntime>();
     result->library = library;
     result->api = api;
+    result->api2 = api2;
     result->runtime = runtime;
     return reinterpret_cast<jlong>(result.release());
 }
@@ -130,6 +140,13 @@ Java_com_localcore_runtime_NativeBridge_version(JNIEnv * env, jclass, jlong poin
     if (!require_host(env, value)) return nullptr;
     const char * version = value->api->runtime_version();
     return env->NewStringUTF(version == nullptr ? "" : version);
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_localcore_runtime_NativeBridge_runtimeApi(JNIEnv * env, jclass, jlong pointer) {
+    HostRuntime * value = host(pointer);
+    if (!require_host(env, value)) return 0;
+    return value->api2 == nullptr ? 1 : 2;
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -202,6 +219,61 @@ Java_com_localcore_runtime_NativeBridge_applyChatTemplate(JNIEnv * env, jclass, 
     return env->NewStringUTF(output.data());
 }
 
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_localcore_runtime_NativeBridge_prepareChat(JNIEnv * env, jclass, jlong pointer,
+        jstring request_value, jstring template_value) {
+    HostRuntime * value = host(pointer);
+    if (!require_host(env, value)) return nullptr;
+    if (value->api2 == nullptr) {
+        throw_java(env, "java/lang/IllegalStateException", "当前动态核心不支持工具调用和 thinking，要求 runtimeApi=2");
+        return nullptr;
+    }
+    std::string request = to_utf8(env, request_value);
+    std::string custom_template = to_utf8(env, template_value);
+    const char * template_pointer = template_value == nullptr ? nullptr : custom_template.c_str();
+    int32_t required = value->api2->prepare_chat(value->runtime, template_pointer, request.c_str(), nullptr, 0);
+    if (required < 0) {
+        throw_java(env, "java/lang/IllegalStateException", runtime_error(value, "准备聊天请求", required));
+        return nullptr;
+    }
+    std::vector<char> output(static_cast<size_t>(required) + 1);
+    int32_t written = value->api2->prepare_chat(value->runtime, template_pointer, request.c_str(),
+            output.data(), static_cast<int32_t>(output.size()));
+    if (written < 0 || written > required) {
+        throw_java(env, "java/lang/IllegalStateException", runtime_error(value, "准备聊天请求", written));
+        return nullptr;
+    }
+    output[static_cast<size_t>(written)] = '\0';
+    return env->NewStringUTF(output.data());
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_localcore_runtime_NativeBridge_parseChatOutput(JNIEnv * env, jclass, jlong pointer,
+        jstring plan_value, jstring generated_value) {
+    HostRuntime * value = host(pointer);
+    if (!require_host(env, value)) return nullptr;
+    if (value->api2 == nullptr) {
+        throw_java(env, "java/lang/IllegalStateException", "当前动态核心不支持结构化聊天输出解析，要求 runtimeApi=2");
+        return nullptr;
+    }
+    std::string plan = to_utf8(env, plan_value);
+    std::string generated = to_utf8(env, generated_value);
+    int32_t required = value->api2->parse_chat_output(value->runtime, plan.c_str(), generated.c_str(), nullptr, 0);
+    if (required < 0) {
+        throw_java(env, "java/lang/IllegalStateException", runtime_error(value, "解析聊天输出", required));
+        return nullptr;
+    }
+    std::vector<char> output(static_cast<size_t>(required) + 1);
+    int32_t written = value->api2->parse_chat_output(value->runtime, plan.c_str(), generated.c_str(),
+            output.data(), static_cast<int32_t>(output.size()));
+    if (written < 0 || written > required) {
+        throw_java(env, "java/lang/IllegalStateException", runtime_error(value, "解析聊天输出", written));
+        return nullptr;
+    }
+    output[static_cast<size_t>(written)] = '\0';
+    return env->NewStringUTF(output.data());
+}
+
 extern "C" JNIEXPORT jint JNICALL
 Java_com_localcore_runtime_NativeBridge_tokenCount(JNIEnv * env, jclass, jlong pointer, jstring text_value) {
     HostRuntime * value = host(pointer);
@@ -215,7 +287,7 @@ Java_com_localcore_runtime_NativeBridge_tokenCount(JNIEnv * env, jclass, jlong p
 extern "C" JNIEXPORT jint JNICALL
 Java_com_localcore_runtime_NativeBridge_generate(JNIEnv * env, jclass, jlong pointer,
         jstring prompt_value, jint max_tokens, jfloat temperature, jfloat top_p, jint top_k,
-        jlong seed, jobjectArray stop_values, jobject callback) {
+        jlong seed, jobjectArray stop_values, jstring plan_value, jobject callback) {
     HostRuntime * value = host(pointer);
     if (!require_host(env, value)) return -1;
     std::string prompt = to_utf8(env, prompt_value);
@@ -246,8 +318,18 @@ Java_com_localcore_runtime_NativeBridge_generate(JNIEnv * env, jclass, jlong poi
     params.seed = seed < 0 ? UINT32_MAX : static_cast<uint32_t>(seed);
     params.stop = stops.data();
     params.stop_count = stops.size();
-    int32_t result = value->api->generate(value->runtime, prompt.c_str(), &params,
-            token_callback, &java_callback);
+    std::string plan = to_utf8(env, plan_value);
+    int32_t result;
+    if (plan_value != nullptr) {
+        if (value->api2 == nullptr) {
+            throw_java(env, "java/lang/IllegalStateException", "聊天计划要求 runtimeApi=2");
+            return -1;
+        }
+        result = value->api2->generate_chat(value->runtime, prompt.c_str(), &params, plan.c_str(),
+                token_callback, &java_callback);
+    } else {
+        result = value->api->generate(value->runtime, prompt.c_str(), &params, token_callback, &java_callback);
+    }
     if (result < 0 && !env->ExceptionCheck()) {
         throw_java(env, "java/lang/IllegalStateException", runtime_error(value, "推理", result));
     }
