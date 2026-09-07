@@ -1,6 +1,9 @@
 package com.localcore
 
 import android.app.Activity
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import com.facebook.react.bridge.ActivityEventListener
@@ -9,6 +12,7 @@ import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
+import com.localcore.runtime.RuntimeState
 import com.localcore.service.BackendService
 
 class BackendModule(private val reactContext: ReactApplicationContext) :
@@ -20,6 +24,8 @@ class BackendModule(private val reactContext: ReactApplicationContext) :
     get() = reactContext.applicationContext as MainApplication
 
   private var pickPromise: Promise? = null
+  private var savePromise: Promise? = null
+  private var saveBytes: ByteArray? = null
 
   private val executor = java.util.concurrent.Executors.newSingleThreadExecutor()
 
@@ -36,6 +42,28 @@ class BackendModule(private val reactContext: ReactApplicationContext) :
 
   private val pickListener: ActivityEventListener = object : BaseActivityEventListener() {
     override fun onActivityResult(activity: Activity, requestCode: Int, resultCode: Int, intent: Intent?) {
+      if (requestCode == SAVE_REQUEST) {
+        val promise = savePromise
+        val bytes = saveBytes
+        savePromise = null
+        saveBytes = null
+        if (promise == null) return
+        val uri = intent?.data
+        if (resultCode == Activity.RESULT_OK && uri != null && bytes != null) {
+          try {
+            reactContext.contentResolver.openOutputStream(uri, "wt")?.use {
+              it.write(bytes)
+              it.flush()
+            } ?: throw IllegalStateException("系统未提供输出流")
+            promise.resolve(uri.toString())
+          } catch (error: Exception) {
+            promise.reject("SAVE_FAILED", error.message, error)
+          }
+        } else {
+          promise.reject("SAVE_CANCELLED", "未选择保存位置")
+        }
+        return
+      }
       if (requestCode != PICK_REQUEST) return
       val promise = pickPromise
       pickPromise = null
@@ -124,6 +152,51 @@ class BackendModule(private val reactContext: ReactApplicationContext) :
   }
 
   @ReactMethod
+  fun deleteModel(modelId: String, promise: Promise) {
+    runAsync(promise, "DELETE_MODEL_FAILED") {
+      val graph = application.graph
+      val state = graph.runtime.state()
+      if (modelId == state.modelId && state.phase == RuntimeState.Phase.MODEL_READY) {
+        graph.runtime.unload()
+      }
+      graph.exchange.deleteModel(modelId)
+      null
+    }
+  }
+
+  @ReactMethod
+  fun copyText(text: String, promise: Promise) {
+    try {
+      val clipboard = reactContext.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+      clipboard.setPrimaryClip(ClipData.newPlainText("LocalCore", text))
+      promise.resolve(null)
+    } catch (error: Exception) {
+      promise.reject("COPY_FAILED", error.message, error)
+    }
+  }
+
+  @ReactMethod
+  fun exportLog(fileName: String, content: String, promise: Promise) {
+    if (savePromise != null) {
+      promise.reject("SAVE_BUSY", "已有导出任务进行中")
+      return
+    }
+    val activity = reactContext.currentActivity
+    if (activity == null) {
+      promise.reject("NO_ACTIVITY", "没有前台界面")
+      return
+    }
+    savePromise = promise
+    saveBytes = content.toByteArray(Charsets.UTF_8)
+    val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+      addCategory(Intent.CATEGORY_OPENABLE)
+      type = "text/plain"
+      putExtra(Intent.EXTRA_TITLE, fileName)
+    }
+    activity.startActivityForResult(Intent.createChooser(intent, "导出日志"), SAVE_REQUEST)
+  }
+
+  @ReactMethod
   fun checkCoreUpdate(promise: Promise) {
     try {
       application.graph.updates.checkNow()
@@ -170,5 +243,6 @@ class BackendModule(private val reactContext: ReactApplicationContext) :
 
   companion object {
     private const val PICK_REQUEST = 4701
+    private const val SAVE_REQUEST = 4702
   }
 }

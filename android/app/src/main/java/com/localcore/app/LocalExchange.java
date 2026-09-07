@@ -78,6 +78,43 @@ public final class LocalExchange {
         events.info("resource", "多模态投影已配对 " + modelId + " <- " + resourceId);
     }
 
+    public void deleteModel(String modelId) throws Exception {
+        JSONObject next = config.current();
+        JSONArray models = next.getJSONArray("models");
+        JSONObject target = null;
+        JSONArray keptModels = new JSONArray();
+        for (int i = 0; i < models.length(); i++) {
+            JSONObject model = models.getJSONObject(i);
+            if (modelId.equals(model.optString("id"))) target = model;
+            else keptModels.put(model);
+        }
+        if (target == null) throw new IllegalArgumentException("配置中不存在模型: " + modelId);
+        next.put("models", keptModels);
+        // 已配对的投影与模型文件一起删除；仍被其余模型引用的资源保留，核心资源永不删除。
+        Set<String> candidates = new HashSet<>();
+        if (!target.optString("resource").isEmpty()) candidates.add(target.optString("resource"));
+        if (!target.optString("mmproj").isEmpty()) candidates.add(target.optString("mmproj"));
+        for (int i = 0; i < keptModels.length(); i++) {
+            JSONObject model = keptModels.getJSONObject(i);
+            candidates.remove(model.optString("resource"));
+            candidates.remove(model.optString("mmproj"));
+        }
+        candidates.remove(CORE_ID);
+        // ResourceManager.delete 要求描述符仍在配置中，所以先删文件再更新配置。
+        for (String resourceId : candidates) {
+            resources.delete(resourceId);
+        }
+        JSONArray allResources = next.getJSONArray("resources");
+        JSONArray keptResources = new JSONArray();
+        for (int i = 0; i < allResources.length(); i++) {
+            JSONObject descriptor = allResources.getJSONObject(i);
+            if (!candidates.contains(descriptor.optString("id"))) keptResources.put(descriptor);
+        }
+        next.put("resources", keptResources);
+        config.activate(next.toString());
+        events.info("resource", "模型已删除 " + modelId);
+    }
+
     public void importCore(Uri uri) throws Exception {
         String name = displayName(uri);
         String base = stripSuffix(stripSuffix(stripSuffix(stripSuffix(name, ".tar.gz"), ".tgz"), ".zip"), ".so");
