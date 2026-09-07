@@ -128,7 +128,8 @@ std::vector<std::string> string_array(const common_json & object, const char * k
     return result;
 }
 
-int evaluate_text(Engine & runtime, const std::string & prompt) {
+int evaluate_text(Engine & runtime, const std::string & prompt,
+                    localcore_progress_callback progress, void * progress_data) {
     const llama_vocab * vocab = llama_model_get_vocab(runtime.model);
     std::vector<llama_token> tokens = common_tokenize(vocab, prompt, true, true);
     if (tokens.empty()) throw std::runtime_error("提示词分词结果为空");
@@ -138,11 +139,16 @@ int evaluate_text(Engine & runtime, const std::string & prompt) {
         llama_batch batch = llama_batch_get_one(tokens.data() + offset, count);
         if (llama_decode(runtime.context, batch) != 0) throw std::runtime_error("llama_decode 提示词失败");
         offset += static_cast<size_t>(count);
+        if (progress != nullptr) {
+            progress("context", static_cast<int32_t>(offset),
+                    static_cast<int32_t>(tokens.size()), progress_data);
+        }
     }
     return static_cast<int>(tokens.size());
 }
 
-int evaluate_media(Engine & runtime, const std::string & prompt, const std::vector<std::string> & paths) {
+int evaluate_media(Engine & runtime, const std::string & prompt, const std::vector<std::string> & paths,
+                   localcore_progress_callback progress, void * progress_data) {
     if (runtime.vision == nullptr) throw std::runtime_error("请求包含图片，但当前模型没有加载 MMPROJ");
     std::vector<mtmd_bitmap *> bitmaps;
     std::vector<mtmd_helper_video *> videos;
@@ -162,11 +168,38 @@ int evaluate_media(Engine & runtime, const std::string & prompt, const std::vect
         if (tokenized != 0) {
             throw std::runtime_error("MTMD 提示词与图片分词失败，错误码 " + std::to_string(tokenized));
         }
+        // Same semantics as mtmd_helper_eval_chunks, unrolled for per-chunk progress.
+        size_t chunk_count = mtmd_input_chunks_size(chunks.get());
+        int32_t image_total = 0;
+        int32_t context_total = 0;
+        for (size_t i = 0; i < chunk_count; i++) {
+            const mtmd_input_chunk * chunk = mtmd_input_chunks_get(chunks.get(), i);
+            if (mtmd_input_chunk_get_type(chunk) == MTMD_INPUT_CHUNK_TYPE_TEXT) {
+                context_total += static_cast<int32_t>(mtmd_input_chunk_get_n_tokens(chunk));
+            } else {
+                image_total++;
+            }
+        }
+        if (progress != nullptr) progress("image", 0, image_total, progress_data);
         llama_pos position = 0;
-        int32_t evaluated = mtmd_helper_eval_chunks(runtime.vision, runtime.context, chunks.get(),
-                0, 0, runtime.batch_size, true, &position);
-        if (evaluated != 0) {
-            throw std::runtime_error("MTMD 图片编码或 llama_decode 失败，错误码 " + std::to_string(evaluated));
+        int32_t image_done = 0;
+        int32_t context_done = 0;
+        for (size_t i = 0; i < chunk_count; i++) {
+            if (runtime.cancelled.load(std::memory_order_relaxed)) break;
+            const mtmd_input_chunk * chunk = mtmd_input_chunks_get(chunks.get(), i);
+            bool chunk_logits_last = (i == chunk_count - 1);
+            int32_t evaluated = mtmd_helper_eval_chunk_single(runtime.vision, runtime.context, chunk,
+                    position, 0, runtime.batch_size, chunk_logits_last, &position);
+            if (evaluated != 0) {
+                throw std::runtime_error("MTMD 图片编码或 llama_decode 失败，错误码 " + std::to_string(evaluated));
+            }
+            if (mtmd_input_chunk_get_type(chunk) == MTMD_INPUT_CHUNK_TYPE_TEXT) {
+                context_done += static_cast<int32_t>(mtmd_input_chunk_get_n_tokens(chunk));
+                if (progress != nullptr) progress("context", context_done, context_total, progress_data);
+            } else {
+                image_done++;
+                if (progress != nullptr) progress("image", image_done, image_total, progress_data);
+            }
         }
         int count = static_cast<int>(mtmd_helper_get_n_tokens(chunks.get()));
         for (mtmd_bitmap * bitmap : bitmaps) mtmd_bitmap_free(bitmap);
@@ -398,6 +431,14 @@ extern "C" LOCALCORE_EXPORT int localcore_core_unload_model(void * instance, cha
 extern "C" LOCALCORE_EXPORT int localcore_core_infer(
         void * instance, const char * request_json, localcore_token_callback callback,
         void * user_data, char ** result_json, char ** error) {
+    return localcore_core_infer2(instance, request_json, callback, user_data,
+            nullptr, nullptr, result_json, error);
+}
+
+extern "C" LOCALCORE_EXPORT int localcore_core_infer2(
+        void * instance, const char * request_json, localcore_token_callback token_callback,
+        void * token_user_data, localcore_progress_callback progress_callback,
+        void * progress_user_data, char ** result_json, char ** error) {
     try {
         Engine & runtime = engine(instance);
         std::lock_guard<std::mutex> lock(runtime.operation);
@@ -420,13 +461,14 @@ extern "C" LOCALCORE_EXPORT int localcore_core_infer(
         }
         std::vector<std::string> media_paths = string_array(request, "mediaPaths");
         int prompt_tokens = media_paths.empty()
-                ? evaluate_text(runtime, prompt) : evaluate_media(runtime, prompt, media_paths);
+                ? evaluate_text(runtime, prompt, progress_callback, progress_user_data)
+                : evaluate_media(runtime, prompt, media_paths, progress_callback, progress_user_data);
         common_params_sampling params = sampling_params(runtime, request, chat_pointer);
         int completion_tokens = 0;
         bool streamed = false;
         std::string text = generate(runtime, params,
                 int_value(request, "max_tokens", 1024), string_array(request, "stop"), completion_tokens,
-                callback, user_data, streamed);
+                token_callback, token_user_data, streamed);
         common_chat_msg message;
         common_chat_msg * message_pointer = nullptr;
         if (chat_pointer != nullptr) {
@@ -441,8 +483,8 @@ extern "C" LOCALCORE_EXPORT int localcore_core_infer(
         }
         const std::string & callback_text = message_pointer == nullptr ? text : message_pointer->content;
         // 已逐 token 推送过的不再补一次全文；老核心行为（单次全量回调）保持不变。
-        if (!streamed && callback != nullptr && !callback_text.empty()
-                && callback(callback_text.data(), callback_text.size(), user_data) == 0) {
+        if (!streamed && token_callback != nullptr && !callback_text.empty()
+                && token_callback(callback_text.data(), callback_text.size(), token_user_data) == 0) {
             throw std::runtime_error("响应消费者拒绝生成文本");
         }
         set_string(result_json, make_result(prompt_tokens, completion_tokens, text, message_pointer).dump());
