@@ -462,7 +462,6 @@ public final class LocalExchange {
         result.put("contextSize", requireInt(load, "contextSize"));
         result.put("batchSize", requireInt(load, "batchSize"));
         result.put("threads", requireInt(load, "threads"));
-        result.put("gpuLayers", requireInt(load, "gpuLayers"));
         return result;
     }
 
@@ -588,7 +587,7 @@ public final class LocalExchange {
         model.put("resource", resourceId);
         model.put("core", coreId == null ? "" : coreId);
         model.put("template", new JSONObject().put("mode", "embedded"));
-        model.put("load", json("contextSize", contextSize, "batchSize", 512, "threads", 4, "gpuLayers", -1));
+        model.put("load", json("contextSize", contextSize, "batchSize", 512, "threads", 4));
         model.put("inference", json("maxTokens", 100000, "temperature", 0.7, "topP", 0.95, "topK", 40, "seed", -1,
                 "stop", new JSONArray()));
         model.put("thinking", json("enabled", false, "format", "none", "budgetTokens", -1));

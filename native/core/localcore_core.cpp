@@ -367,7 +367,6 @@ extern "C" LOCALCORE_EXPORT int localcore_core_load_model(
         common_json request = common_json::parse(request_json == nullptr ? "" : request_json);
         runtime.unload();
         llama_model_params model_params = llama_model_default_params();
-        model_params.n_gpu_layers = int_value(request, "gpuLayers", 0);
         std::string model_path = required(request, "modelPath").get<std::string>();
         runtime.model = llama_model_load_from_file(model_path.c_str(), model_params);
         if (runtime.model == nullptr) throw std::runtime_error("llama.cpp 无法加载模型: " + model_path);

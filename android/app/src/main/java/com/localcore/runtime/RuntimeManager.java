@@ -105,7 +105,6 @@ public final class RuntimeManager {
             request.put("contextSize", load.getInt("contextSize"));
             request.put("batchSize", load.getInt("batchSize"));
             request.put("threads", load.getInt("threads"));
-            request.put("gpuLayers", Math.max(0, load.optInt("gpuLayers", 0)));
             JSONObject template = model.optJSONObject("template");
             if (template != null && "custom".equals(template.optString("mode"))) {
                 String custom = template.optString("value", "");
