@@ -177,6 +177,79 @@ public final class LocalExchange {
         events.info("resource", "模型模板已自定义 " + modelId);
     }
 
+    public String modelSettings(String modelId) throws Exception {
+        JSONObject model = modelById(config.current(), modelId);
+        JSONObject result = new JSONObject();
+        result.put("load", model.optJSONObject("load") == null ? new JSONObject() : model.getJSONObject("load"));
+        result.put("inference",
+                model.optJSONObject("inference") == null ? new JSONObject() : model.getJSONObject("inference"));
+        return result.toString();
+    }
+
+    public void setModelSettings(String modelId, String loadJson, String inferenceJson) throws Exception {
+        JSONObject load;
+        JSONObject inference;
+        try {
+            load = new JSONObject(loadJson == null ? "{}" : loadJson);
+            inference = new JSONObject(inferenceJson == null ? "{}" : inferenceJson);
+        } catch (JSONException error) {
+            throw new IllegalArgumentException("设置不是合法 JSON: " + error.getMessage());
+        }
+        JSONObject next = config.current();
+        JSONObject model = modelById(next, modelId);
+        model.put("load", checkedLoad(load));
+        model.put("inference", checkedInference(inference));
+        config.activate(next.toString());
+        events.info("resource", "模型参数已更新 " + modelId + "，加载项下次加载生效");
+    }
+
+    private static JSONObject checkedLoad(JSONObject load) throws JSONException {
+        JSONObject result = new JSONObject();
+        result.put("contextSize", requireInt(load, "contextSize"));
+        result.put("batchSize", requireInt(load, "batchSize"));
+        result.put("threads", requireInt(load, "threads"));
+        result.put("gpuLayers", requireInt(load, "gpuLayers"));
+        return result;
+    }
+
+    private static JSONObject checkedInference(JSONObject inference) throws JSONException {
+        JSONObject result = new JSONObject();
+        result.put("maxTokens", requireInt(inference, "maxTokens"));
+        result.put("temperature", requireNumber(inference, "temperature"));
+        result.put("topP", requireNumber(inference, "topP"));
+        result.put("topK", requireInt(inference, "topK"));
+        result.put("seed", requireInt(inference, "seed"));
+        JSONArray stop = inference.optJSONArray("stop");
+        JSONArray checked = new JSONArray();
+        if (stop != null) {
+            for (int i = 0; i < stop.length(); i++) {
+                Object item = stop.opt(i);
+                if (!(item instanceof String)) throw new IllegalArgumentException("stop 必须是字符串数组");
+                checked.put(item);
+            }
+        }
+        result.put("stop", checked);
+        return result;
+    }
+
+    private static int requireInt(JSONObject source, String key) {
+        Object value = source.opt(key);
+        if (!(value instanceof Number)) throw new IllegalArgumentException(key + " 必须是数字");
+        double asDouble = ((Number) value).doubleValue();
+        if (!Double.isFinite(asDouble) || asDouble != Math.rint(asDouble)) {
+            throw new IllegalArgumentException(key + " 必须是整数");
+        }
+        return (int) asDouble;
+    }
+
+    private static double requireNumber(JSONObject source, String key) {
+        Object value = source.opt(key);
+        if (!(value instanceof Number)) throw new IllegalArgumentException(key + " 必须是数字");
+        double asDouble = ((Number) value).doubleValue();
+        if (!Double.isFinite(asDouble)) throw new IllegalArgumentException(key + " 必须是有限数字");
+        return asDouble;
+    }
+
     public String currentCoreId() {
         return CORE_ID;
     }

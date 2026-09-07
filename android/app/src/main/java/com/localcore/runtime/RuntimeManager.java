@@ -226,6 +226,7 @@ public final class RuntimeManager {
             setState(new RuntimeState(RuntimeState.Phase.GENERATING,
                     before.coreId, before.coreVersion, loadedModelId, null));
             body.put("type", kind);
+            applyModelDefaults(body);
             stage(stages, "核心推理开始");
             JSONObject response = new JSONObject(nativeRuntime.infer3(body.toString(), timed, forwarding2));
             stage(stages, "核心推理结束");
@@ -249,6 +250,24 @@ public final class RuntimeManager {
 
     private static void stage(StageListener stages, String text) {
         if (stages != null) stages.onStage(text);
+    }
+
+    // 模型配置里的推理参数只做缺省：请求里已有的键不动，保证 API 显式传参永远优先。
+    private void applyModelDefaults(JSONObject body) throws org.json.JSONException {
+        JSONObject model = findModel(loadedModelId);
+        JSONObject inference = model.optJSONObject("inference");
+        if (inference == null) return;
+        putDefault(body, "max_tokens", inference.opt("maxTokens"));
+        putDefault(body, "temperature", inference.opt("temperature"));
+        putDefault(body, "top_p", inference.opt("topP"));
+        putDefault(body, "top_k", inference.opt("topK"));
+        putDefault(body, "seed", inference.opt("seed"));
+        putDefault(body, "stop", inference.optJSONArray("stop"));
+    }
+
+    private static void putDefault(JSONObject body, String key, Object value) throws org.json.JSONException {
+        if (body.has(key) || value == null || JSONObject.NULL.equals(value)) return;
+        body.put(key, value);
     }
 
     private JSONObject findModel(String id) {

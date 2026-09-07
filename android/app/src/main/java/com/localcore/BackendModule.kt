@@ -390,6 +390,21 @@ class BackendModule(private val reactContext: ReactApplicationContext) :
   }
 
   @ReactMethod
+  fun getModelSettings(modelId: String, promise: Promise) {
+    runAsync(promise, "SETTINGS_FAILED") {
+      application.graph.exchange.modelSettings(modelId)
+    }
+  }
+
+  @ReactMethod
+  fun setModelSettings(modelId: String, loadJson: String, inferenceJson: String, promise: Promise) {
+    runAsync(promise, "SETTINGS_FAILED") {
+      application.graph.exchange.setModelSettings(modelId, loadJson, inferenceJson)
+      null
+    }
+  }
+
+  @ReactMethod
   fun importMmproj(uriString: String, modelId: String, promise: Promise) {
     runAsync(promise, "IMPORT_MMPROJ_FAILED") {
       application.graph.exchange.importMmproj(Uri.parse(uriString), modelId)
