@@ -101,7 +101,12 @@ final class MediaResolver {
             File scaled = scaleFile(new File(paths.optString(i)), targetWidth, targetHeight);
             if (scaled != null) {
                 new File(paths.optString(i)).delete();
-                paths.put(i, scaled.getAbsolutePath());
+                try {
+                    paths.put(i, scaled.getAbsolutePath());
+                } catch (org.json.JSONException error) {
+                    scaled.delete();
+                    throw new IOException("更新媒体路径失败", error);
+                }
             }
         }
     }
