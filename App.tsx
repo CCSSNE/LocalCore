@@ -164,6 +164,7 @@ export default function App() {
   const [progressMsg, setProgressMsg] = useState('');
   const prefillComplete = useRef(true);
   const progressStarted = useRef(false);
+  const progressT0 = useRef(0);
   const [chatGate, setChatGate] = useState<{loading: boolean; models: number; loaded: boolean}>({
     loading: true,
     models: 0,
@@ -488,7 +489,8 @@ export default function App() {
       const pct = total > 0 ? ` ${((done / total) * 100).toFixed(2)}%` : '';
       const speedTxt = done > 0 && elapsedMs > 0 ? `${(done / (elapsedMs / 1000)).toFixed(2)}t/s` : '--';
       const mspTxt = done > 0 && elapsedMs > 0 ? `${(elapsedMs / done).toFixed(2)}ms/t` : '--';
-      const msg = `${labels[phase] ?? phase} ${done}/${total}${pct} ${speedTxt} ${mspTxt}`;
+      const secTxt = progressT0.current > 0 ? `${((Date.now() - progressT0.current) / 1000).toFixed(1)}s` : '--';
+      const msg = `${labels[phase] ?? phase} ${done}/${total}${pct} ${speedTxt} ${mspTxt} ${secTxt}`;
       progressStarted.current = true;
       setProgressMsg(msg);
       push('info', '·· ' + msg);
@@ -611,6 +613,7 @@ export default function App() {
     setProgressMsg('');
     prefillComplete.current = false;
     progressStarted.current = false;
+    progressT0.current = Date.now();
     const label = '聊天推理';
     setBusy(label);
     push('info', '>> ' + label + '：' + prompt + (images.length > 0 ? ` [${images.length}张图片]` : ''));
@@ -890,11 +893,10 @@ export default function App() {
           );
         })}
         {typing ? (
-          <View style={[styles.bubble, styles.bubbleAi, styles.typingRow]}>
-            <Text style={[styles.bubbleAiText, styles.typingText]}>
+          <View style={[styles.bubble, styles.bubbleAi]}>
+            <Text style={styles.bubbleAiText}>
               {progressMsg || (stageMsg && stageMsg !== '核心推理开始' ? stageMsg : '正在准备输入…')}
             </Text>
-            <ActivityIndicator style={styles.typingSpinner} size="small" />
           </View>
         ) : null}
       </ScrollView>
@@ -1536,9 +1538,6 @@ const styles = StyleSheet.create({
   bubbleError: {backgroundColor: '#fdecea', alignSelf: 'flex-start', borderWidth: 1, borderColor: '#b00020'},
   bubbleAiText: {color: '#111111'},
   bubbleUserText: {color: '#ffffff'},
-  typingRow: {flexDirection: 'row', alignItems: 'center'},
-  typingText: {flexShrink: 1},
-  typingSpinner: {marginLeft: 8},
   userRow: {flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'flex-end', marginBottom: 8},
   userContent: {flexShrink: 1, maxWidth: '85%', alignItems: 'flex-end'},
   bubbleUserInRow: {alignSelf: 'flex-end', maxWidth: '100%', marginBottom: 4},
