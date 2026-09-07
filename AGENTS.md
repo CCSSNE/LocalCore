@@ -7,6 +7,7 @@
 
 - 本文档中"仓库"一词均包含 GitHub Release：Release 是仓库的一部分。.gitignore 的产物禁令只约束 git 树，Release 允许上传 SO 等成品，允许从 Release 拉取成品。
 - 用户已删除的文件一律视为废纸：不要查看、不要找回、不要引用其内容，也不要恢复。
+- 本项目唯一的动态核心是 llama.rn 官方 Release 发布的安卓 JNI 库包（llama-rn-android-jni-libs.tar.gz）。导入和更新都以它为准，更新源就是 llama.rn 的 GitHub Release；禁止恢复自产核心路线（runtime.cpp / build-runtime.ps1 / native-api / native_bridge.cpp）。
 
 
 ## 工作原则
