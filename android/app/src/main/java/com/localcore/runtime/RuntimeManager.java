@@ -126,38 +126,46 @@ public final class RuntimeManager {
             }
             if (messages.length() == 0) throw new IllegalArgumentException("messages 不能为空");
             String template = template(model);
-            if (NativeBridge.runtimeApi(activeHandle) >= 2) {
-                JSONObject effective = effectiveChatRequest(model, request);
-                JSONObject plan = Jsons.parseObject(NativeBridge.prepareChat(activeHandle, effective.toString(), template), "聊天计划");
-                String prompt = plan.optString("prompt");
-                boolean structured = plan.optBoolean("parseToolCalls") || !"none".equals(plan.optString("reasoningFormat"));
-                Result generated = generateLocked(activeHandle, model, prompt, effective,
-                        structured ? null : consumer, plan);
-                JSONObject message = Jsons.parseObject(NativeBridge.parseChatOutput(activeHandle,
-                        plan.toString(), generated.text), "助手消息");
-                return new Result(generated.promptTokens, generated.completionTokens, generated.text, message, structured);
+            JSONObject effective = effectiveChatRequest(model, request);
+            JSONArray tools = effective.optJSONArray("tools");
+            boolean parseToolCalls = tools != null && tools.length() > 0;
+            String grammar = effective.optString("grammar", "");
+            if (parseToolCalls && !grammar.isEmpty()) {
+                throw new IllegalArgumentException("工具调用不能与自定义 grammar 同时使用");
             }
             List<String> roles = new ArrayList<>();
             List<String> contents = new ArrayList<>();
             for (int i = 0; i < messages.length(); i++) {
                 JSONObject message = messages.optJSONObject(i);
                 Object content = message == null ? null : message.opt("content");
-                if (message == null || message.optString("role").isEmpty() || !(content instanceof String)) {
-                    throw new IllegalArgumentException("runtimeApi=1 只支持字符串 role/content 消息");
+                if (message == null || message.optString("role").isEmpty() || content == null) {
+                    throw new IllegalArgumentException("消息 role/content 不能为空");
                 }
                 roles.add(message.optString("role"));
-                contents.add((String) content);
+                contents.add(content instanceof String ? (String) content : content.toString());
             }
-            if (request.has("tools") || request.has("reasoning_format") || request.has("reasoning_effort")) {
-                throw new IllegalArgumentException("工具调用和 thinking 要求 runtimeApi=2");
+            if (parseToolCalls) {
+                String toolHint = "可用工具(JSON Schema):\n" + tools
+                        + "\n需要调用工具时，只使用 <tool_call>{\"name\": \"工具名\", \"arguments\": {...}}</tool_call> 格式输出。";
+                boolean merged = false;
+                for (int i = 0; i < roles.size(); i++) {
+                    if ("system".equals(roles.get(i))) {
+                        contents.set(i, contents.get(i) + "\n\n" + toolHint);
+                        merged = true;
+                        break;
+                    }
+                }
+                if (!merged) {
+                    roles.add(0, "system");
+                    contents.add(0, toolHint);
+                }
             }
             String prompt = NativeBridge.applyChatTemplate(activeHandle, roles.toArray(new String[0]),
                     contents.toArray(new String[0]), template);
-            Result generated = generateLocked(activeHandle, model, prompt, request, consumer, null);
-            JSONObject message = new JSONObject();
-            put(message, "role", "assistant");
-            put(message, "content", generated.text);
-            return new Result(generated.promptTokens, generated.completionTokens, generated.text, message, false);
+            Result generated = generateLocked(activeHandle, model, prompt, effective, consumer, grammar);
+            JSONObject message = parseAssistantOutput(generated.text, effective, parseToolCalls);
+            return new Result(generated.promptTokens, generated.completionTokens, generated.text,
+                    message, parseToolCalls || !"none".equals(effective.optString("reasoning_format", "none")));
         } catch (RuntimeException error) {
             RuntimeState before = state();
             setState(new RuntimeState(RuntimeState.Phase.ERROR, before.coreId, before.coreVersion,
@@ -180,7 +188,8 @@ public final class RuntimeManager {
                 activeHandle = handle;
                 model = loadedModel;
             }
-            return generateLocked(activeHandle, model, prompt, request, consumer, null);
+            return generateLocked(activeHandle, model, prompt, request, consumer,
+                    request.optString("grammar", ""));
         } catch (RuntimeException error) {
             RuntimeState before = state();
             setState(new RuntimeState(RuntimeState.Phase.ERROR, before.coreId, before.coreVersion,
@@ -200,7 +209,7 @@ public final class RuntimeManager {
     public void removeListener(Listener listener) { listeners.remove(listener); }
 
     private Result generateLocked(long activeHandle, JSONObject model, String prompt,
-                                   JSONObject request, TokenConsumer consumer, JSONObject chatPlan) {
+                                   JSONObject request, TokenConsumer consumer, String grammar) {
         int promptTokens = NativeBridge.tokenCount(activeHandle, prompt);
         JSONObject defaults = model.optJSONObject("inference");
         int maxTokens = request.has("max_tokens") ? request.optInt("max_tokens", -1) : defaults.optInt("maxTokens");
@@ -212,21 +221,14 @@ public final class RuntimeManager {
                 || seed < -1 || seed > 0xffffffffL) {
             throw new IllegalArgumentException("请求中的推理参数超出有效范围");
         }
-        JSONArray mergedStops = new JSONArray();
-        String[] configuredStops = stops(request.has("stop") ? request.opt("stop") : defaults.optJSONArray("stop"));
-        for (String stop : configuredStops) mergedStops.put(stop);
-        if (chatPlan != null) {
-            JSONArray additional = chatPlan.optJSONArray("additionalStops");
-            for (int i = 0; additional != null && i < additional.length(); i++) mergedStops.put(additional.optString(i));
-        }
-        String[] stopValues = stops(mergedStops);
+        String[] stopValues = stops(request.has("stop") ? request.opt("stop") : defaults.optJSONArray("stop"));
         RuntimeState before = state();
         setState(new RuntimeState(RuntimeState.Phase.GENERATING, before.coreId, before.coreVersion,
                 model.optString("id"), null));
         StringBuilder text = new StringBuilder();
         final IOException[] callbackError = new IOException[1];
         int generated = NativeBridge.generate(activeHandle, prompt, maxTokens, (float) temperature,
-                (float) topP, topK, seed, stopValues, chatPlan == null ? null : chatPlan.toString(), token -> {
+                (float) topP, topK, seed, stopValues, grammar, token -> {
                     String decoded = new String(token, java.nio.charset.StandardCharsets.UTF_8);
                     text.append(decoded);
                     try {
@@ -240,6 +242,83 @@ public final class RuntimeManager {
         setState(new RuntimeState(RuntimeState.Phase.MODEL_READY, before.coreId, before.coreVersion,
                 model.optString("id"), null));
         return new Result(promptTokens, generated, text.toString());
+    }
+
+    private JSONObject parseAssistantOutput(String text, JSONObject request, boolean parseToolCalls) {
+        String reasoningFormat = request.optString("reasoning_format", "none");
+        String content = text;
+        String reasoning = null;
+        int start = text.indexOf("<think>");
+        if (!"none".equals(reasoningFormat) && start >= 0) {
+            int end = text.indexOf("</think>");
+            if (end >= 0) {
+                reasoning = text.substring(start + "<think>".length(), end).trim();
+                content = text.substring(end + "</think>".length()).stripLeading();
+            } else {
+                reasoning = text.substring(start + "<think>".length()).trim();
+                content = "";
+            }
+        }
+        JSONObject message = new JSONObject();
+        put(message, "role", "assistant");
+        put(message, "content", content);
+        if (reasoning != null && !reasoning.isEmpty()) put(message, "reasoning_content", reasoning);
+        if (!parseToolCalls) return message;
+        JSONArray toolCalls = new JSONArray();
+        int index = 0;
+        StringBuilder cleaned = new StringBuilder();
+        int cursor = 0;
+        while (true) {
+            int open = content.indexOf("<tool_call>", cursor);
+            if (open < 0) break;
+            int close = content.indexOf("</tool_call>", open);
+            if (close < 0) break;
+            cleaned.append(content, cursor, open);
+            String body = content.substring(open + "<tool_call>".length(), close).trim();
+            cursor = close + "</tool_call>".length();
+            for (Object item : toolCallItems(body)) {
+                index++;
+                JSONObject call = new JSONObject();
+                put(call, "id", "call_localcore_" + index);
+                put(call, "type", "function");
+                put(call, "function", item);
+                toolCalls.put(call);
+            }
+        }
+        cleaned.append(content.substring(cursor));
+        if (index > 0) {
+            put(message, "content", cleaned.toString().strip());
+            put(message, "tool_calls", toolCalls);
+        }
+        return message;
+    }
+
+    private static List<JSONObject> toolCallItems(String body) {
+        Object parsed = Jsons.parseObjectOrArray(body, "工具调用输出");
+        List<JSONObject> result = new ArrayList<>();
+        if (parsed instanceof JSONArray) {
+            JSONArray array = (JSONArray) parsed;
+            for (int i = 0; i < array.length(); i++) result.add(functionPayload(array.optJSONObject(i)));
+        } else if (parsed instanceof JSONObject) {
+            result.add(functionPayload((JSONObject) parsed));
+        }
+        return result;
+    }
+
+    private static JSONObject functionPayload(JSONObject call) {
+        if (call == null) throw new IllegalArgumentException("工具调用必须是 JSON 对象");
+        if (call.has("function") && call.optJSONObject("function") != null) {
+            return call.optJSONObject("function");
+        }
+        JSONObject function = new JSONObject();
+        Object arguments = call.has("arguments") ? call.opt("arguments") : call.optJSONObject("parameters");
+        try {
+            function.put("name", call.optString("name"));
+            function.put("arguments", arguments instanceof String ? arguments : String.valueOf(arguments));
+        } catch (org.json.JSONException error) {
+            throw new IllegalStateException("工具调用字段写入失败", error);
+        }
+        return function;
     }
 
     private JSONObject effectiveChatRequest(JSONObject model, JSONObject request) {

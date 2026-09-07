@@ -343,7 +343,7 @@ public final class MainActivity extends Activity {
         if (coreStatus == null) return;
         String coreId = currentCoreId();
         if (coreId == null) {
-            coreStatus.setText("尚未安装核心。点击 导入核心 选择本地 .so 文件或 .zip 核心包。");
+            coreStatus.setText("尚未安装核心。点击 导入核心 选择本地 .so 文件、.zip 或 .tar.gz 核心包。");
             coreStatus.setTextColor(MUTED);
             return;
         }

@@ -14,7 +14,6 @@ import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
-import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
@@ -25,7 +24,6 @@ import java.io.OutputStream;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.zip.ZipEntry;
-import java.util.zip.ZipInputStream;
 import java.util.zip.ZipOutputStream;
 
 public final class LocalExchange {
@@ -74,7 +72,7 @@ public final class LocalExchange {
 
     public void importCore(Uri uri) throws Exception {
         String name = displayName(uri);
-        String base = stripSuffix(stripSuffix(name, ".zip"), ".so");
+        String base = stripSuffix(stripSuffix(stripSuffix(stripSuffix(name, ".tar.gz"), ".tgz"), ".zip"), ".so");
         String resourceId = uniqueResourceId("local.core." + sanitize(base));
         File temp = File.createTempFile("core-import-", ".tmp", context.getFilesDir());
         try {
@@ -120,20 +118,81 @@ public final class LocalExchange {
     }
 
     private String detectCoreEntry(File file, String name) throws IOException {
-        if (!isZip(file)) return sanitize(name);
-        try (ZipInputStream zip = new ZipInputStream(new BufferedInputStream(new FileInputStream(file)))) {
-            ZipEntry entry;
-            while ((entry = zip.getNextEntry()) != null) {
-                if (!entry.isDirectory() && entry.getName().endsWith(".so")) return entry.getName();
-            }
+        if (!com.localcore.io.Archives.isZip(file) && !com.localcore.io.Archives.isTar(file)) {
+            return sanitize(name);
         }
-        throw new IOException("核心包内没有 .so 文件: " + name);
+        java.util.List<String> entries = com.localcore.io.Archives.isZip(file)
+                ? com.localcore.io.Archives.zipEntries(file)
+                : com.localcore.io.Archives.tarEntries(file);
+        return pickCoreEntry(entries, name);
     }
 
-    private static boolean isZip(File file) throws IOException {
-        try (FileInputStream input = new FileInputStream(file)) {
-            return input.read() == 'P' && input.read() == 'K';
+    private static String pickCoreEntry(java.util.List<String> entries, String name) {
+        java.util.List<String> soEntries = new java.util.ArrayList<>();
+        for (String entry : entries) {
+            if (entry.endsWith(".so")) soEntries.add(entry);
         }
+        String abi = null;
+        java.util.List<String> candidates = null;
+        for (String supported : android.os.Build.SUPPORTED_ABIS) {
+            java.util.List<String> matching = new java.util.ArrayList<>();
+            String prefix = "jniLibs/" + supported + "/";
+            for (String entry : soEntries) {
+                if (entry.startsWith(prefix)) matching.add(entry);
+            }
+            if (!matching.isEmpty()) {
+                abi = supported;
+                candidates = matching;
+                break;
+            }
+        }
+        if (candidates == null) {
+            throw new IllegalArgumentException("核心包内没有 jniLibs/<abi>/*.so: " + name);
+        }
+        for (String preferred : preferredLibraries(abi)) {
+            for (String entry : candidates) {
+                if (entry.endsWith(preferred)) return entry;
+            }
+        }
+        return candidates.get(0);
+    }
+
+    private static java.util.List<String> preferredLibraries(String abi) {
+        java.util.List<String> result = new java.util.ArrayList<>();
+        if ("arm64-v8a".equals(abi)) {
+            String features = cpuFeatures();
+            boolean fp16 = features.contains("fp16") || features.contains("fphp");
+            boolean dotProd = features.contains("dotprod") || features.contains("asimddp");
+            boolean i8mm = features.contains("i8mm");
+            if (dotProd && i8mm) result.add("librnllama_v8_2_dotprod_i8mm.so");
+            if (dotProd) result.add("librnllama_v8_2_dotprod.so");
+            if (i8mm) result.add("librnllama_v8_2_i8mm.so");
+            if (fp16) result.add("librnllama_v8_2.so");
+            result.add("librnllama_v8.so");
+        } else if ("x86_64".equals(abi)) {
+            result.add("librnllama_x86_64.so");
+        }
+        result.add("librnllama.so");
+        return result;
+    }
+
+    private static String cpuFeatures() {
+        StringBuilder features = new StringBuilder();
+        try (java.io.BufferedReader reader = new java.io.BufferedReader(
+                new java.io.FileReader("/proc/cpuinfo"))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                String lower = line.toLowerCase(java.util.Locale.ROOT);
+                if (lower.startsWith("features") || lower.startsWith("flags")) {
+                    int index = lower.indexOf(':');
+                    if (index != -1 && index + 1 < lower.length()) {
+                        features.append(lower.substring(index + 1).trim()).append(' ');
+                    }
+                }
+            }
+        } catch (IOException ignored) {
+        }
+        return features.toString();
     }
 
     private static void zipDirectory(File directory, ZipOutputStream output) throws IOException {

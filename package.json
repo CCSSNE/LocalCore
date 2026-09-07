@@ -3,8 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "build:android:release": "cd android && gradlew.bat assembleRelease",
-    "build:runtime:android": "powershell -ExecutionPolicy Bypass -File scripts/build-runtime.ps1"
+    "build:android:release": "cd android && gradlew.bat assembleRelease"
   },
   "engines": {
     "node": ">=18"

@@ -21,6 +21,14 @@ public final class Jsons {
         }
     }
 
+    public static Object parseObjectOrArray(String text, String source) {
+        try {
+            return new org.json.JSONTokener(text).nextValue();
+        } catch (JSONException error) {
+            throw new IllegalArgumentException(source + " 不是有效 JSON: " + error.getMessage(), error);
+        }
+    }
+
     public static JSONObject readObject(File file) throws IOException {
         try (FileInputStream input = new FileInputStream(file)) {
             return parseObject(readUtf8(input), file.getAbsolutePath());

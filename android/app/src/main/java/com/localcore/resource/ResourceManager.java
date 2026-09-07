@@ -325,11 +325,17 @@ public final class ResourceManager {
         if (targetDirectory.exists()) deleteTree(targetDirectory);
 
         if ("core".equals(type)) {
-            if (isZipArchive(partial)) {
+            if (com.localcore.io.Archives.isZip(partial)) {
                 File staging = new File(idDirectory, version + ".candidate");
                 if (staging.exists()) deleteTree(staging);
-                ensureDirectory(staging);
-                unzip(partial, staging);
+                com.localcore.io.Archives.ensureDirectory(staging);
+                com.localcore.io.Archives.unzip(partial, staging);
+                AtomicFiles.move(staging, targetDirectory);
+            } else if (com.localcore.io.Archives.isTar(partial)) {
+                File staging = new File(idDirectory, version + ".candidate");
+                if (staging.exists()) deleteTree(staging);
+                com.localcore.io.Archives.ensureDirectory(staging);
+                com.localcore.io.Archives.untar(partial, staging);
                 AtomicFiles.move(staging, targetDirectory);
             } else {
                 ensureDirectory(targetDirectory);
@@ -344,33 +350,6 @@ public final class ResourceManager {
         File target = new File(targetDirectory, id + extension);
         AtomicFiles.move(partial, target);
         return target;
-    }
-
-    private static boolean isZipArchive(File file) throws IOException {
-        try (FileInputStream input = new FileInputStream(file)) {
-            return input.read() == 'P' && input.read() == 'K';
-        }
-    }
-
-    private void unzip(File archive, File target) throws IOException {
-        try (ZipInputStream input = new ZipInputStream(new BufferedInputStream(new FileInputStream(archive)))) {
-            ZipEntry entry;
-            while ((entry = input.getNextEntry()) != null) {
-                File output = new File(target, entry.getName());
-                if (entry.isDirectory()) {
-                    ensureDirectory(output);
-                } else {
-                    ensureDirectory(output.getParentFile());
-                    try (FileOutputStream file = new FileOutputStream(output)) {
-                        byte[] buffer = new byte[64 * 1024];
-                        int count;
-                        while ((count = input.read(buffer)) != -1) file.write(buffer, 0, count);
-                        file.getFD().sync();
-                    }
-                }
-                input.closeEntry();
-            }
-        }
     }
 
     private synchronized void update(ResourceState state) {
