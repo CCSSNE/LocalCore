@@ -72,6 +72,11 @@ function fmtMsPerTok(ms: number, tok: number): string {
   return `${(ms / tok).toFixed(1)}ms/t`;
 }
 
+function fmtClock(d: Date): string {
+  const p = (n: number, w = 2) => String(n).padStart(w, '0');
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`;
+}
+
 function StatsStrip({stats}: {stats: TurnStats}) {
   const [open, setOpen] = useState(false);
   const head = `total-${fmtCount(stats.inT + stats.out)} ${fmtSpeed(stats.out, stats.llm)} ${fmtDur(stats.ttft)}`;
@@ -147,6 +152,7 @@ export default function App() {
   const [draft, setDraft] = useState('');
   const [pendingImage, setPendingImage] = useState<string | null>(null);
   const [viewerUri, setViewerUri] = useState<string | null>(null);
+  const [stageMsg, setStageMsg] = useState('');
   const [modelList, setModelList] = useState<ModelEntry[] | null>(null);
   const [modelError, setModelError] = useState<string | null>(null);
   const [listLoading, setListLoading] = useState(false);
@@ -166,7 +172,7 @@ export default function App() {
   const logScroll = useRef<ScrollView | null>(null);
 
   const push = (kind: LogLine['kind'], text: string) =>
-    setLog(prev => [...prev, {kind, text}]);
+    setLog(prev => [...prev, {kind, text: `[${fmtClock(new Date())}] ${text}`}]);
 
   const go = (next: RouteKey) => {
     setRoute(next);
@@ -354,7 +360,17 @@ export default function App() {
         return next;
       });
     });
-    return () => sub.remove();
+    const stageSub = chatEvents.addListener('LocalCoreChatStage', (text: any) => {
+      const s = String(text ?? '');
+      if (!s) return;
+      setStageMsg(s);
+      push('info', '·· ' + s);
+    });
+    return () => {
+      sub.remove();
+      stageSub.remove();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -415,6 +431,7 @@ export default function App() {
     setDraft('');
     setMessages(prev => [...prev, {role: 'user', text: prompt, imageUri: image}]);
     setMessages(prev => [...prev, {role: 'ai', text: '', live: true}]);
+    setStageMsg('');
     const label = '聊天推理';
     setBusy(label);
     push('info', '>> ' + label + '：' + prompt + (image ? ' [图片]' : ''));
@@ -440,6 +457,7 @@ export default function App() {
           return next;
         });
         if (image) setPendingImage(null);
+        setStageMsg('');
         push('ok', 'OK ' + label + ' => ' + text);
       })
       .catch((error: Error) => {
@@ -451,6 +469,7 @@ export default function App() {
           next[next.length - 1] = {role: 'error', text: error.message};
           return next;
         });
+        setStageMsg('');
         push('fail', 'FAIL ' + label + ' => ' + error.message);
       })
       .finally(() => setBusy(null));
@@ -540,7 +559,7 @@ export default function App() {
         {typing ? (
           <View style={[styles.bubble, styles.bubbleAi]}>
             <ActivityIndicator />
-            <Text style={styles.bubbleAiText}>正在推理…</Text>
+            <Text style={styles.bubbleAiText}>{stageMsg || '正在推理…'}</Text>
           </View>
         ) : null}
       </ScrollView>
