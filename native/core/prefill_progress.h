@@ -184,7 +184,7 @@ private:
         const int32_t value = finished ? 10000 : std::min(9999, static_cast<int>(std::floor(completed / phase.total * 10000)));
         const auto now = std::chrono::steady_clock::now();
         const bool switched = current != &phase;
-        if (!switched && !force && (value == phase.last_value || now - last_report < std::chrono::milliseconds(80))) return;
+        if (!switched && !force && (value == phase.last_value || now - last_report < std::chrono::milliseconds(100))) return;
         if (switched && current != nullptr) {
             current->elapsed_ms += std::chrono::duration_cast<std::chrono::milliseconds>(now - phase_since).count();
         }
