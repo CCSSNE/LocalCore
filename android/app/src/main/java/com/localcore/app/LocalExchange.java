@@ -56,18 +56,24 @@ public final class LocalExchange {
         JSONObject next = config.current();
         upsertResource(next, descriptor);
         long ggufContext;
+        String contextNote;
         try {
             ggufContext = GgufMeta.contextLength(resources.installedFile(resourceId));
         } catch (Exception error) {
-            throw new IllegalStateException("读取模型上下文长度失败，拒绝导入: " + error.getMessage(), error);
+            ggufContext = -1;
+            events.error("resource", "读取模型上下文长度失败", error);
         }
         if (ggufContext <= 0) {
-            throw new IllegalStateException("模型未声明上下文长度(llama.context_length 缺失)，拒绝导入: " + name);
+            ggufContext = Integer.MAX_VALUE;
+            contextNote = "模型未声明上下文长度，已回退无限制，显存不足会在加载时直接报错";
+            events.error("resource", "模型未声明上下文长度(llama.context_length 缺失): " + name);
+        } else {
+            contextNote = "上下文 " + ggufContext;
         }
         next.getJSONArray("models").put(modelEntry(base, modelId, resourceId, currentCoreId(), ggufContext));
         config.activate(next.toString());
-        events.info("resource", "本地模型已导入并注册 " + modelId + " 上下文 " + ggufContext);
-        return modelId;
+        events.info("resource", "本地模型已导入并注册 " + modelId + " " + contextNote);
+        return modelId + "（" + contextNote + "）";
     }
 
     public String downloadHfModel(String requestText) throws Exception {
@@ -99,6 +105,7 @@ public final class LocalExchange {
         source.put("revision", revision);
         source.put("fileName", fileName);
         source.put("contextPending", true);
+        source.remove("registrationError");
         model.put("source", source);
         config.activate(next.toString());
 
@@ -291,20 +298,42 @@ public final class LocalExchange {
     }
 
     private void finalizeHfModelContext(String modelId, String revision, File file) throws Exception {
-        long contextSize = GgufMeta.contextLength(file);
-        if (contextSize <= 0) throw new IllegalStateException("GGUF 未提供有效上下文长度: " + file.getName());
-        JSONObject next = config.current();
-        JSONObject model = modelById(next, modelId);
-        JSONObject source = model.getJSONObject("source");
-        if (!revision.equals(source.optString("revision"))) {
-            throw new IllegalStateException("模型下载版本与当前配置不一致: downloaded=" + revision
-                    + ", configured=" + source.optString("revision"));
+        try {
+            long contextSize = GgufMeta.contextLength(file);
+            if (contextSize <= 0) {
+                throw new IllegalStateException("GGUF 未提供有效上下文长度: " + file.getName());
+            }
+            JSONObject next = config.current();
+            JSONObject model = modelById(next, modelId);
+            JSONObject source = model.getJSONObject("source");
+            if (!revision.equals(source.optString("revision"))) {
+                throw new IllegalStateException("模型下载版本与当前配置不一致: downloaded=" + revision
+                        + ", configured=" + source.optString("revision"));
+            }
+            if (!source.optBoolean("contextPending")) return;
+            model.getJSONObject("load").put("contextSize", contextSize);
+            source.put("contextPending", false);
+            source.remove("registrationError");
+            config.activate(next.toString());
+            events.info("resource", "HF 模型上下文已从 GGUF 写入 " + modelId + " => " + contextSize);
+        } catch (Exception error) {
+            recordHfRegistrationError(modelId, revision, error);
+            throw error;
         }
-        if (!source.optBoolean("contextPending")) return;
-        model.getJSONObject("load").put("contextSize", contextSize);
-        source.put("contextPending", false);
-        config.activate(next.toString());
-        events.info("resource", "HF 模型上下文已从 GGUF 写入 " + modelId + " => " + contextSize);
+    }
+
+    private void recordHfRegistrationError(String modelId, String revision, Exception error) {
+        try {
+            JSONObject next = config.current();
+            JSONObject model = findModelById(next, modelId);
+            if (model == null) return;
+            JSONObject source = model.optJSONObject("source");
+            if (source == null || !revision.equals(source.optString("revision"))) return;
+            source.put("registrationError", error.getMessage());
+            config.activate(next.toString());
+        } catch (Exception persistenceError) {
+            events.error("resource", "记录 HF 模型注册失败原因时出错 " + modelId, persistenceError);
+        }
     }
 
     private JSONObject hfDescriptor(JSONObject request, String resourceId, String sourceId,
@@ -518,7 +547,7 @@ public final class LocalExchange {
         model.put("core", coreId == null ? "" : coreId);
         model.put("template", new JSONObject().put("mode", "embedded"));
         model.put("load", json("contextSize", contextSize, "batchSize", 512, "threads", 4, "gpuLayers", -1));
-        model.put("inference", json("maxTokens", 1024, "temperature", 0.7, "topP", 0.95, "topK", 40, "seed", -1,
+        model.put("inference", json("maxTokens", 131072, "temperature", 0.7, "topP", 0.95, "topK", 40, "seed", -1,
                 "stop", new JSONArray()));
         model.put("thinking", json("enabled", false, "format", "none", "budgetTokens", -1));
         model.put("toolCalling", json("enabled", false, "parallel", false, "choice", "none"));
