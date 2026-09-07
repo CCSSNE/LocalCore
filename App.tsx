@@ -785,7 +785,9 @@ export default function App() {
         {typing ? (
           <View style={[styles.bubble, styles.bubbleAi]}>
             <ActivityIndicator />
-            <Text style={styles.bubbleAiText}>{progressMsg || stageMsg || '正在推理…'}</Text>
+            <Text style={styles.bubbleAiText}>
+              {progressMsg || (stageMsg && stageMsg !== '核心推理开始' ? stageMsg : '正在解码…')}
+            </Text>
           </View>
         ) : null}
       </ScrollView>
