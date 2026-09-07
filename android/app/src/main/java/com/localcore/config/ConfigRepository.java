@@ -40,12 +40,16 @@ public final class ConfigRepository {
             if (!activeFile.isFile()) {
                 try (InputStream input = context.getAssets().open("default_config.json")) {
                     JSONObject initial = Jsons.parseObject(Jsons.readUtf8(input), "内置初始配置");
-                    validator.validate(initial);
+                    initial = validator.normalizeAndValidate(initial);
                     AtomicFiles.writeUtf8(activeFile, Jsons.format(initial));
                 }
             }
-            active = Jsons.readObject(activeFile);
-            validator.validate(active);
+            JSONObject stored = Jsons.readObject(activeFile);
+            active = validator.normalizeAndValidate(stored);
+            if (!active.toString().equals(stored.toString())) {
+                AtomicFiles.writeUtf8(activeFile, Jsons.format(active));
+                events.info("config", "有效配置已从 schemaVersion=1 明确迁移到 schemaVersion=2");
+            }
             events.info("config", "已加载配置 schemaVersion=" + active.optInt("schemaVersion"));
         } catch (Exception error) {
             events.error("config", "有效配置加载失败", error);
@@ -63,8 +67,13 @@ public final class ConfigRepository {
 
     public JSONObject validate(String text) {
         JSONObject candidate = Jsons.parseObject(text, "候选配置");
-        validator.validate(candidate);
-        return candidate;
+        return validator.normalizeAndValidate(candidate);
+    }
+
+    public JSONObject validateUpdateManifest(String text) {
+        JSONObject manifest = Jsons.parseObject(text, "更新清单");
+        validator.validateUpdateManifest(manifest);
+        return manifest;
     }
 
     public void activate(String text) throws IOException {

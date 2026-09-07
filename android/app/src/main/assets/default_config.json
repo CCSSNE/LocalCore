@@ -1,13 +1,49 @@
 {
-  "schemaVersion": 1,
-  "hostApi": 1,
+  "schemaVersion": 2,
+  "hostApi": 2,
   "server": {
     "host": "127.0.0.1",
     "port": 11434,
     "autoStart": false,
     "apiKey": ""
   },
+  "protocol": {
+    "routes": {
+      "health": "/health",
+      "models": "/v1/models",
+      "chatCompletions": "/v1/chat/completions",
+      "completions": "/v1/completions"
+    }
+  },
+  "updates": {
+    "enabled": false,
+    "manifestUrl": "",
+    "checkIntervalMinutes": 360,
+    "autoActivate": false,
+    "autoInstall": false
+  },
+  "diagnostics": {
+    "minimumLevel": "info",
+    "logcat": true,
+    "maxFileBytes": 4194304,
+    "retainedFiles": 3
+  },
+  "management": {
+    "sections": [
+      {
+        "id": "service",
+        "title": "服务与更新",
+        "fields": [
+          {"path": "/server/host", "label": "监听地址", "control": "select", "options": ["127.0.0.1", "0.0.0.0"]},
+          {"path": "/server/port", "label": "端口", "control": "number"},
+          {"path": "/server/autoStart", "label": "自动启动服务", "control": "toggle"},
+          {"path": "/server/apiKey", "label": "Bearer API Key", "control": "text"},
+          {"path": "/updates/enabled", "label": "自动检查更新", "control": "toggle"},
+          {"path": "/updates/manifestUrl", "label": "更新清单 URL", "control": "text"}
+        ]
+      }
+    ]
+  },
   "resources": [],
   "models": []
 }
-

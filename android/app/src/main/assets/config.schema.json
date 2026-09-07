@@ -1,20 +1,69 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://localcore.dev/schema/config-v1.json",
+  "$id": "https://localcore.dev/schema/config-v2.json",
   "title": "LocalCore configuration",
   "type": "object",
-  "required": ["schemaVersion", "hostApi", "server", "resources", "models"],
+  "required": ["schemaVersion", "hostApi", "server", "protocol", "updates", "diagnostics", "management", "resources", "models"],
   "properties": {
-    "schemaVersion": {"const": 1},
-    "hostApi": {"const": 1},
+    "schemaVersion": {"const": 2},
+    "hostApi": {"const": 2},
     "server": {
       "type": "object",
-      "required": ["host", "port", "autoStart"],
+      "required": ["host", "port", "autoStart", "apiKey"],
       "properties": {
-        "host": {"type": "string"},
+        "host": {"enum": ["127.0.0.1", "0.0.0.0"]},
         "port": {"type": "integer", "minimum": 1, "maximum": 65535},
         "autoStart": {"type": "boolean"},
         "apiKey": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "protocol": {
+      "type": "object",
+      "required": ["routes"],
+      "properties": {
+        "routes": {
+          "type": "object",
+          "required": ["health", "models", "chatCompletions", "completions"],
+          "properties": {
+            "health": {"$ref": "#/$defs/route"},
+            "models": {"$ref": "#/$defs/route"},
+            "chatCompletions": {"$ref": "#/$defs/route"},
+            "completions": {"$ref": "#/$defs/route"}
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "updates": {
+      "type": "object",
+      "required": ["enabled", "manifestUrl", "checkIntervalMinutes", "autoActivate", "autoInstall"],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "manifestUrl": {"type": "string"},
+        "checkIntervalMinutes": {"type": "integer", "minimum": 15, "maximum": 525600},
+        "autoActivate": {"type": "boolean"},
+        "autoInstall": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    },
+    "diagnostics": {
+      "type": "object",
+      "required": ["minimumLevel", "logcat", "maxFileBytes", "retainedFiles"],
+      "properties": {
+        "minimumLevel": {"enum": ["debug", "info", "error"]},
+        "logcat": {"type": "boolean"},
+        "maxFileBytes": {"type": "integer", "minimum": 65536},
+        "retainedFiles": {"type": "integer", "minimum": 1, "maximum": 100}
+      },
+      "additionalProperties": false
+    },
+    "management": {
+      "type": "object",
+      "required": ["sections"],
+      "properties": {
+        "sections": {"type": "array", "items": {"$ref": "#/$defs/managementSection"}}
       },
       "additionalProperties": false
     },
@@ -23,34 +72,143 @@
   },
   "additionalProperties": false,
   "$defs": {
+    "route": {"type": "string", "pattern": "^/[^?#]*$"},
+    "download": {
+      "type": "object",
+      "required": ["url", "sha256", "size", "entry"],
+      "properties": {
+        "url": {"type": "string", "format": "uri"},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "size": {"type": "integer", "minimum": 1},
+        "entry": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
     "resource": {
       "type": "object",
       "required": ["id", "type", "version"],
       "properties": {
         "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$"},
         "type": {"enum": ["core", "model", "template", "config"]},
-        "version": {"type": "string"},
+        "version": {"type": "string", "minLength": 1},
         "url": {"type": "string", "format": "uri"},
         "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
         "size": {"type": "integer", "minimum": 1},
-        "abi": {"type": "string"},
-        "entry": {"type": "string"},
-        "variants": {"type": "object"}
+        "runtimeApi": {"type": "integer", "minimum": 1, "maximum": 2},
+        "autoActivate": {"type": "boolean"},
+        "variants": {
+          "type": "object",
+          "minProperties": 1,
+          "properties": {
+            "arm64-v8a": {"$ref": "#/$defs/download"},
+            "x86_64": {"$ref": "#/$defs/download"}
+          },
+          "additionalProperties": false
+        }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {"properties": {"type": {"const": "core"}}},
+          "then": {"required": ["runtimeApi", "variants"]},
+          "else": {"required": ["url", "sha256", "size"]}
+        },
+        {
+          "if": {"properties": {"type": {"const": "config"}}},
+          "then": {"required": ["autoActivate"]}
+        }
+      ]
     },
     "model": {
       "type": "object",
-      "required": ["id", "name", "resource", "core", "template", "load", "inference"],
+      "required": ["id", "name", "resource", "core", "template", "load", "inference", "thinking", "toolCalling", "requirements", "capabilities"],
       "properties": {
-        "id": {"type": "string"},
-        "name": {"type": "string"},
+        "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$"},
+        "name": {"type": "string", "minLength": 1},
         "resource": {"type": "string"},
         "core": {"type": "string"},
-        "template": {"type": "object"},
-        "load": {"type": "object"},
-        "inference": {"type": "object"},
-        "capabilities": {"type": "array", "items": {"type": "string"}}
+        "template": {
+          "type": "object",
+          "required": ["mode"],
+          "properties": {"mode": {"enum": ["embedded", "resource"]}, "resource": {"type": "string"}},
+          "additionalProperties": false
+        },
+        "load": {
+          "type": "object",
+          "required": ["contextSize", "batchSize", "threads", "gpuLayers"],
+          "properties": {
+            "contextSize": {"type": "integer", "minimum": 128},
+            "batchSize": {"type": "integer", "minimum": 1},
+            "threads": {"type": "integer", "minimum": 1},
+            "gpuLayers": {"type": "integer", "minimum": -1}
+          },
+          "additionalProperties": false
+        },
+        "inference": {
+          "type": "object",
+          "required": ["maxTokens", "temperature", "topP", "topK", "seed", "stop"],
+          "properties": {
+            "maxTokens": {"type": "integer", "minimum": 1},
+            "temperature": {"type": "number", "minimum": 0},
+            "topP": {"type": "number", "minimum": 0, "maximum": 1},
+            "topK": {"type": "integer", "minimum": 0},
+            "seed": {"type": "integer", "minimum": -1, "maximum": 4294967295},
+            "stop": {"type": "array", "items": {"type": "string", "minLength": 1}}
+          },
+          "additionalProperties": false
+        },
+        "thinking": {
+          "type": "object",
+          "required": ["enabled", "format", "budgetTokens"],
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "format": {"enum": ["none", "auto", "deepseek", "deepseek-legacy"]},
+            "budgetTokens": {"type": "integer", "minimum": -1}
+          },
+          "additionalProperties": false
+        },
+        "toolCalling": {
+          "type": "object",
+          "required": ["enabled", "parallel", "choice"],
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "parallel": {"type": "boolean"},
+            "choice": {"enum": ["auto", "none", "required"]}
+          },
+          "additionalProperties": false
+        },
+        "requirements": {
+          "type": "object",
+          "required": ["hostApiMin", "hostApiMax", "runtimeApi"],
+          "properties": {
+            "hostApiMin": {"type": "integer", "minimum": 1, "maximum": 2},
+            "hostApiMax": {"type": "integer", "minimum": 1, "maximum": 2},
+            "runtimeApi": {"type": "integer", "minimum": 1, "maximum": 2}
+          },
+          "additionalProperties": false
+        },
+        "capabilities": {"type": "array", "uniqueItems": true, "items": {"enum": ["text", "streaming", "jinja", "thinking", "tools"]}}
+      },
+      "additionalProperties": false
+    },
+    "managementField": {
+      "type": "object",
+      "required": ["path", "label", "control"],
+      "properties": {
+        "path": {"type": "string", "pattern": "^/"},
+        "label": {"type": "string", "minLength": 1},
+        "control": {"enum": ["text", "number", "toggle", "select"]},
+        "options": {"type": "array", "minItems": 1, "items": {"type": ["string", "number"]}}
+      },
+      "additionalProperties": false
+    },
+    "managementSection": {
+      "type": "object",
+      "required": ["id", "title", "fields"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$"},
+        "title": {"type": "string", "minLength": 1},
+        "fields": {"type": "array", "items": {"$ref": "#/$defs/managementField"}}
       },
       "additionalProperties": false
     }
