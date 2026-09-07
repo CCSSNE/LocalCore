@@ -117,10 +117,10 @@ class BackendModule(private val reactContext: ReactApplicationContext) :
   fun getBackendState(promise: Promise) {
     try {
       val graph = application.graph
-      val state = java.util.HashMap<String, Any>()
-      state["backend"] = graph.backend.current().toString()
-      state["runtime"] = graph.runtime.state().toString()
-      state["config"] = graph.config.current().toString()
+      val state = org.json.JSONObject()
+      state.put("backend", graph.backend.current().toString())
+      state.put("runtime", graph.runtime.state().toString())
+      state.put("config", graph.config.current())
       promise.resolve(state.toString())
     } catch (error: Exception) {
       promise.reject("STATE_FAILED", error.message, error)
