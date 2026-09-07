@@ -438,6 +438,7 @@ public final class ResourceManager {
     private static JSONObject effective(JSONObject descriptor) {
         if (!"core".equals(descriptor.optString("type"))) return descriptor;
         JSONObject variants = descriptor.optJSONObject("variants");
+        if (variants == null) return descriptor;
         for (String abi : Build.SUPPORTED_ABIS) {
             JSONObject variant = variants.optJSONObject(abi);
             if (variant != null) return variant;
