@@ -5,6 +5,8 @@
 #include "llama.h"
 #include "sampling.h"
 
+#include <nlohmann/json.hpp>
+
 #include <algorithm>
 #include <atomic>
 #include <cstring>
@@ -307,7 +309,6 @@ int32_t prepare_chat(void * opaque, const char * source, const char * request_js
             {"reasoningFormat", common_reasoning_format_name(inputs.reasoning_format)},
             {"parseToolCalls", !inputs.tools.empty() && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE},
             {"parser", chat.parser},
-            {"messageDelimiters", chat.message_delimiters.to_json()},
             {"additionalStops", chat.additional_stops},
             {"preservedTokens", chat.preserved_tokens},
             {"reasoningBudgetTokens", body.value("reasoning_budget_tokens",
@@ -341,7 +342,6 @@ int32_t parse_chat_output(void * opaque, const char * plan_json, const char * ge
         params.generation_prompt = plan.value("generationPrompt", std::string());
         params.parse_tool_calls = plan.value("parseToolCalls", false);
         if (!plan.value("parser", std::string()).empty()) params.parser.load(plan.at("parser").get<std::string>());
-        params.message_delimiters = common_chat_msg_delimiters_parse(plan.at("messageDelimiters"));
         common_chat_msg message = common_chat_parse(generated, false, params);
         if (message.role.empty()) message.role = "assistant";
         size_t index = 0;
