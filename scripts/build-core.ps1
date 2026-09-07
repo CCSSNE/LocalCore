@@ -1,6 +1,6 @@
 param(
     [string]$LlamaTag = 'v0.4.0',
-    [string]$CoreVersion = '0.4.0-localcore.1',
+    [string]$CoreVersion = '0.4.0-localcore.2',
     [string[]]$Abis = @('arm64-v8a', 'x86_64')
 )
 
