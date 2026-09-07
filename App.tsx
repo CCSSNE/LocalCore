@@ -163,10 +163,9 @@ export default function App() {
   const [budgetPx, setBudgetPx] = useState(DEFAULT_BUDGET_PX);
   const [budgetWan, setBudgetWan] = useState('100');
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [coreRt, setCoreRt] = useState<{phase: string | null; error: string | null; coreId: string | null}>({
-    phase: null,
-    error: null,
-    coreId: null,
+  const [coreRt, setCoreRt] = useState<{cuPhase: string | null; cuError: string | null}>({
+    cuPhase: null,
+    cuError: null,
   });
   const [modelList, setModelList] = useState<ModelEntry[] | null>(null);
   const [modelError, setModelError] = useState<string | null>(null);
@@ -296,12 +295,11 @@ export default function App() {
         }
       }
       setCoreInfo(found);
-      const rtErr = root?.runtime?.error;
-      const rtCore = root?.runtime?.coreId;
+      const cu = root?.coreUpdate ?? {};
+      const cuErr = cu.error;
       setCoreRt({
-        phase: root?.runtime?.phase ?? null,
-        error: rtErr == null ? null : String(rtErr),
-        coreId: rtCore == null ? null : String(rtCore),
+        cuPhase: cu.phase == null ? null : String(cu.phase),
+        cuError: cuErr == null ? null : String(cuErr),
       });
       setCoreError(null);
     } catch (error: any) {
@@ -722,21 +720,20 @@ export default function App() {
             <Text style={styles.hint}>点我重试</Text>
           </TouchableOpacity>
         ) : null}
-        {coreInfo !== null && coreRt.phase !== 'error' ? (
+        {coreInfo !== null && coreRt.cuPhase !== 'failed' ? (
           <View style={styles.card}>
             <View style={styles.cardTitleRow}>
               <Text style={styles.cardTitle} numberOfLines={1}>
                 {coreInfo.id}
               </Text>
-              {coreRt.coreId === coreInfo.id &&
-              (coreRt.phase === 'model_ready' || coreRt.phase === 'generating') ? (
+              {coreRt.cuPhase !== 'checking' && coreRt.cuPhase !== 'downloading' ? (
                 <Text style={styles.tagLoaded}>已激活</Text>
               ) : null}
             </View>
             <Text style={styles.hint}>版本 {coreInfo.version}</Text>
           </View>
         ) : null}
-        {coreInfo !== null && coreRt.phase === 'error' ? (
+        {coreInfo !== null && coreRt.cuPhase === 'failed' ? (
           <View style={styles.card}>
             <View style={styles.cardTitleRow}>
               <Text style={styles.cardTitle} numberOfLines={1}>
@@ -745,7 +742,7 @@ export default function App() {
               <Text style={styles.tagError}>异常</Text>
             </View>
             <Text style={styles.loadErrorText} selectable>
-              {coreRt.error ?? '未知错误'}
+              {coreRt.cuError ?? '未知错误'}
             </Text>
           </View>
         ) : null}
