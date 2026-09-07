@@ -250,6 +250,63 @@ class BackendModule(private val reactContext: ReactApplicationContext) :
   }
 
   @ReactMethod
+  fun saveImage(imageUriString: String, promise: Promise) {
+    runAsync(promise, "SAVE_IMAGE_FAILED") {
+      val source = Uri.parse(imageUriString)
+      val mime = reactContext.contentResolver.getType(source) ?: "image/jpeg"
+      val extension = when {
+        mime.endsWith("png") -> "png"
+        mime.endsWith("webp") -> "webp"
+        mime.endsWith("gif") -> "gif"
+        else -> "jpg"
+      }
+      if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.Q) {
+        val activity = reactContext.currentActivity
+        if (activity != null && activity.checkSelfPermission(
+                android.Manifest.permission.WRITE_EXTERNAL_STORAGE) !=
+            android.content.pm.PackageManager.PERMISSION_GRANTED) {
+          activity.requestPermissions(
+              arrayOf(android.Manifest.permission.WRITE_EXTERNAL_STORAGE), NOTIFICATION_REQUEST_CODE)
+        }
+      }
+      val name = "localcore-" + System.currentTimeMillis() + "." + extension
+      val values = android.content.ContentValues().apply {
+        put(android.provider.MediaStore.Images.Media.DISPLAY_NAME, name)
+        put(android.provider.MediaStore.Images.Media.MIME_TYPE, mime)
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+          put(android.provider.MediaStore.Images.Media.RELATIVE_PATH, "Pictures/LocalCore")
+          put(android.provider.MediaStore.Images.Media.IS_PENDING, 1)
+        }
+      }
+      val collection = android.provider.MediaStore.Images.Media.getContentUri(
+          android.provider.MediaStore.VOLUME_EXTERNAL_PRIMARY)
+      val target = reactContext.contentResolver.insert(collection, values)
+          ?: throw IllegalStateException("系统未提供图片保存位置")
+      try {
+        reactContext.contentResolver.openInputStream(source)?.use { input ->
+          reactContext.contentResolver.openOutputStream(target)?.use { output ->
+            input.copyTo(output)
+            output.flush()
+          } ?: throw IllegalStateException("系统未提供图片输出流")
+        } ?: throw IllegalStateException("系统未提供图片输入流")
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+          val finished = android.content.ContentValues().apply {
+            put(android.provider.MediaStore.Images.Media.IS_PENDING, 0)
+          }
+          reactContext.contentResolver.update(target, finished, null, null)
+        }
+        name
+      } catch (error: Exception) {
+        try {
+          reactContext.contentResolver.delete(target, null, null)
+        } catch (ignored: Exception) {
+        }
+        throw error
+      }
+    }
+  }
+
+  @ReactMethod
   fun checkCoreUpdate(promise: Promise) {
     try {
       application.graph.updates.checkNow()
