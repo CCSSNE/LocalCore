@@ -602,12 +602,8 @@ export default function App() {
       }),
     );
 
-  const sendChat = () => {
-    const prompt = draft.trim();
-    if ((!prompt && pendingImages.length === 0) || busy) return;
-    const images = [...pendingImages];
-    setDraft('');
-    setPendingImages([]);
+  const startChatTurn = (prompt: string, images: string[]) => {
+    if ((!prompt && images.length === 0) || busy) return;
     followOutput.current = true;
     chatScrollSig.current = '';
     setMessages(prev => [
@@ -666,6 +662,24 @@ export default function App() {
         push('fail', 'FAIL ' + label + ' => ' + error.message);
       })
       .finally(() => setBusy(null));
+  };
+
+  const sendChat = () => {
+    const prompt = draft.trim();
+    if ((!prompt && pendingImages.length === 0) || busy) return;
+    const images = [...pendingImages];
+    setDraft('');
+    setPendingImages([]);
+    startChatTurn(prompt, images);
+  };
+
+  const resendChat = (index: number) => {
+    const m = messages[index];
+    if (!m || m.role !== 'user' || busy) return;
+    const prompt = m.text ?? '';
+    const images = msgImageUris(m);
+    if (!prompt && images.length === 0) return;
+    startChatTurn(prompt, images);
   };
 
   const stopChat = () => {
@@ -786,15 +800,46 @@ export default function App() {
         }}>
         {messages.map((m, i) => {
           const uris = msgImageUris(m);
+          if (m.role === 'user') {
+            return (
+            <View key={i} style={styles.userRow}>
+              <TouchableOpacity
+                style={[styles.retryBtn, (!!busy || gateHint !== null) && styles.retryBtnDisabled]}
+                onPress={() => resendChat(i)}
+                disabled={!!busy || gateHint !== null}
+                hitSlop={8}>
+                <Text style={styles.retryText}>↻</Text>
+              </TouchableOpacity>
+              <View style={styles.userContent}>
+                {m.text !== '' ? (
+                  <View style={[styles.bubble, styles.bubbleUser, styles.bubbleUserInRow, uris.length === 0 && styles.bubbleUserLast]}>
+                    <Text style={styles.bubbleUserText} selectable>
+                      {m.text}
+                    </Text>
+                  </View>
+                ) : null}
+                {uris.length > 0 ? (
+                  <View style={[styles.sentStrip, styles.sentStripInRow]}>
+                    {uris.map((uri, idx) => (
+                      <TouchableOpacity key={uri + '#' + idx} onPress={() => setViewerData({uris, index: idx})}>
+                        <Image source={{uri}} style={styles.thumbSmall} resizeMode="cover" />
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                ) : null}
+              </View>
+            </View>
+            );
+          }
           return (
           <React.Fragment key={i}>
             {m.text !== '' ? (
               <View
                 style={[
                   styles.bubble,
-                  m.role === 'user' ? styles.bubbleUser : m.role === 'error' ? styles.bubbleError : styles.bubbleAi,
+                  m.role === 'error' ? styles.bubbleError : styles.bubbleAi,
                 ]}>
-                <Text style={m.role === 'user' ? styles.bubbleUserText : styles.bubbleAiText} selectable>
+                <Text style={styles.bubbleAiText} selectable>
                   {m.text}
                 </Text>
               </View>
@@ -1435,6 +1480,24 @@ const styles = StyleSheet.create({
   bubbleError: {backgroundColor: '#fdecea', alignSelf: 'flex-start', borderWidth: 1, borderColor: '#b00020'},
   bubbleAiText: {color: '#111111'},
   bubbleUserText: {color: '#ffffff'},
+  userRow: {flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'flex-end', marginBottom: 8},
+  userContent: {flexShrink: 1, maxWidth: '85%', alignItems: 'flex-end'},
+  bubbleUserInRow: {alignSelf: 'flex-end', maxWidth: '100%', marginBottom: 4},
+  bubbleUserLast: {marginBottom: 0},
+  sentStripInRow: {alignSelf: 'flex-end', marginBottom: 0},
+  retryBtn: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 1,
+    borderColor: '#999999',
+    backgroundColor: '#ffffff',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 6,
+  },
+  retryBtnDisabled: {opacity: 0.4},
+  retryText: {fontSize: 13, lineHeight: 15, color: '#666666', textAlign: 'center', includeFontPadding: false},
   sentStrip: {flexDirection: 'row', flexWrap: 'wrap', marginBottom: 8, alignSelf: 'flex-end', justifyContent: 'flex-end'},
   thumbSmall: {width: 72, height: 72, borderRadius: 10, marginLeft: 6, marginBottom: 6},
   statsBox: {backgroundColor: '#f4f4f4', borderRadius: 8, padding: 8, marginBottom: 8, alignSelf: 'flex-start', maxWidth: '85%'},
