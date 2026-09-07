@@ -11,6 +11,9 @@ $buildRoot = Join-Path $repoRoot '.runtime-build\core'
 $distRoot = Join-Path $repoRoot '.runtime-build\dist'
 $ndk = 'D:\AI\audio\android-sdk\ndk\27.3.13750724'
 $toolchain = Join-Path $ndk 'build\cmake\android.toolchain.cmake'
+$javaHome = if ($env:JAVA_HOME) { $env:JAVA_HOME } else { 'C:\Program Files\Eclipse Adoptium\jdk-17.0.19.10-hotspot' }
+$jar = Join-Path $javaHome 'bin\jar.exe'
+if (-not (Test-Path -LiteralPath $jar -PathType Leaf)) { throw "jar.exe not found: $jar" }
 
 if (-not (Test-Path (Join-Path $llamaDir '.git'))) {
     git clone --filter=blob:none --no-checkout https://github.com/ggml-org/llama.cpp.git $llamaDir
@@ -24,7 +27,12 @@ $commit = (git -C $llamaDir rev-parse HEAD).Trim()
 
 New-Item -ItemType Directory -Force $buildRoot, $distRoot | Out-Null
 $packageRoot = Join-Path $distRoot "localcore-core-$CoreVersion"
-if (Test-Path $packageRoot) { Remove-Item -LiteralPath $packageRoot -Recurse -Force }
+$resolvedDistRoot = [System.IO.Path]::GetFullPath($distRoot).TrimEnd('\') + '\'
+$resolvedPackageRoot = [System.IO.Path]::GetFullPath($packageRoot)
+if (-not $resolvedPackageRoot.StartsWith($resolvedDistRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "Package directory escaped dist root: $resolvedPackageRoot"
+}
+if (Test-Path $packageRoot) { Remove-Item -LiteralPath $resolvedPackageRoot -Recurse -Force }
 
 foreach ($abi in $Abis) {
     $buildDir = Join-Path $buildRoot $abi
@@ -60,7 +68,13 @@ $metadata = [ordered]@{
 $metadata | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 (Join-Path $packageRoot 'core.json')
 $zip = Join-Path $distRoot "localcore-core-$CoreVersion-android.zip"
 if (Test-Path $zip) { Remove-Item -LiteralPath $zip -Force }
-Compress-Archive -Path (Join-Path $packageRoot '*') -DestinationPath $zip -CompressionLevel Optimal
+Push-Location $packageRoot
+try {
+    & $jar --create --file $zip .
+    if ($LASTEXITCODE -ne 0) { throw 'Core package creation failed' }
+} finally {
+    Pop-Location
+}
 $hash = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLowerInvariant()
 $size = (Get-Item $zip).Length
 $assetUrl = "https://github.com/CCSSNE/LocalCore/releases/download/core-stable/$(Split-Path -Leaf $zip)"
