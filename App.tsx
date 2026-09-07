@@ -2,6 +2,7 @@ import React, {useEffect, useRef, useState} from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Image,
   Modal,
   NativeModules,
   Pressable,
@@ -36,7 +37,7 @@ const TITLES: Record<RouteKey, string> = {
 };
 
 type LogLine = {kind: 'info' | 'ok' | 'fail'; text: string};
-type ChatMsg = {role: 'user' | 'ai' | 'error'; text: string};
+type ChatMsg = {role: 'user' | 'ai' | 'error'; text: string; imageUri?: string | null};
 type ModelEntry = {id: string; name: string; paired: boolean};
 
 function pickAnd(pickLabel: string, after: (uri: string) => Promise<any>) {
@@ -235,7 +236,7 @@ export default function App() {
     if ((!prompt && !pendingImage) || busy) return;
     const image = pendingImage;
     setDraft('');
-    setMessages(prev => [...prev, {role: 'user', text: prompt + (image ? ' [图片]' : '')}]);
+    setMessages(prev => [...prev, {role: 'user', text: prompt, imageUri: image}]);
     const label = '聊天推理';
     setBusy(label);
     push('info', '>> ' + label + '：' + prompt + (image ? ' [图片]' : ''));
@@ -302,16 +303,22 @@ export default function App() {
         contentContainerStyle={styles.chatListContent}
         onContentSizeChange={() => chatScroll.current?.scrollToEnd({animated: true})}>
         {messages.map((m, i) => (
-          <View
-            key={i}
-            style={[
-              styles.bubble,
-              m.role === 'user' ? styles.bubbleUser : m.role === 'error' ? styles.bubbleError : styles.bubbleAi,
-            ]}>
-            <Text style={m.role === 'user' ? styles.bubbleUserText : styles.bubbleAiText} selectable>
-              {m.text}
-            </Text>
-          </View>
+          <React.Fragment key={i}>
+            {m.text !== '' ? (
+              <View
+                style={[
+                  styles.bubble,
+                  m.role === 'user' ? styles.bubbleUser : m.role === 'error' ? styles.bubbleError : styles.bubbleAi,
+                ]}>
+                <Text style={m.role === 'user' ? styles.bubbleUserText : styles.bubbleAiText} selectable>
+                  {m.text}
+                </Text>
+              </View>
+            ) : null}
+            {m.imageUri ? (
+              <Image source={{uri: m.imageUri}} style={styles.thumb} resizeMode="cover" />
+            ) : null}
+          </React.Fragment>
         ))}
         {busy === '聊天推理' ? (
           <View style={[styles.bubble, styles.bubbleAi]}>
@@ -675,6 +682,7 @@ const styles = StyleSheet.create({
   bubbleError: {backgroundColor: '#fdecea', alignSelf: 'flex-start', borderWidth: 1, borderColor: '#b00020'},
   bubbleAiText: {color: '#111111'},
   bubbleUserText: {color: '#ffffff'},
+  thumb: {width: 120, height: 120, borderRadius: 10, marginBottom: 8, alignSelf: 'flex-end'},
   inputBar: {flexDirection: 'row', padding: 10, paddingLeft: 2, borderTopWidth: 1, borderTopColor: '#e5e5e5', alignItems: 'flex-end'},
   pendingBar: {
     flexDirection: 'row',
