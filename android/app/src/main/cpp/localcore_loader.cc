@@ -4,6 +4,7 @@
 #include <android/log.h>
 #include <dlfcn.h>
 
+#include <cstring>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
@@ -20,6 +21,8 @@ using destroy_fn = void (*)(void *);
 using load_model_fn = int (*)(void *, const char *, char **, char **);
 using unload_model_fn = int (*)(void *, char **);
 using infer_fn = int (*)(void *, const char *, localcore_token_callback, void *, char **, char **);
+using infer2_fn = int (*)(void *, const char *, localcore_token_callback, void *,
+        localcore_progress_callback, void *, char **, char **);
 using cancel_fn = void (*)(void *);
 using free_string_fn = void (*)(char *);
 
@@ -35,6 +38,15 @@ T symbol(void * library, const char * name) {
     return value;
 }
 
+// Additive symbols (e.g. infer2) are optional: old cores keep working without progress.
+template <typename T>
+T optional_symbol(void * library, const char * name) {
+    dlerror();
+    auto value = reinterpret_cast<T>(dlsym(library, name));
+    dlerror();
+    return value;
+}
+
 struct Core {
     void * library = nullptr;
     void * instance = nullptr;
@@ -43,6 +55,7 @@ struct Core {
     load_model_fn load_model = nullptr;
     unload_model_fn unload_model = nullptr;
     infer_fn infer = nullptr;
+    infer2_fn infer2 = nullptr;
     cancel_fn cancel = nullptr;
     free_string_fn free_string = nullptr;
     std::mutex operation;
@@ -111,6 +124,21 @@ int emit_token(const char * text, size_t size, void * opaque) {
     return state->env->ExceptionCheck() ? 0 : keep == JNI_TRUE;
 }
 
+struct ProgressState {
+    JNIEnv * env;
+    jobject callback;
+    jmethodID method;
+};
+
+void emit_progress(const char * phase, int32_t done, int32_t total, void * opaque) {
+    auto * state = static_cast<ProgressState *>(opaque);
+    if (state == nullptr || state->callback == nullptr) return;
+    jstring name = java_string(state->env, phase, strlen(phase));
+    if (name == nullptr) return;
+    state->env->CallVoidMethod(state->callback, state->method, name, done, total);
+    state->env->DeleteLocalRef(name);
+}
+
 std::string take(Core * core, char * value) {
     if (value == nullptr) return {};
     std::string result(value);
@@ -141,6 +169,7 @@ Java_com_localcore_runtime_NativeRuntime_nativeOpenCore(JNIEnv * env, jclass, js
         core->load_model = symbol<load_model_fn>(core->library, "localcore_core_load_model");
         core->unload_model = symbol<unload_model_fn>(core->library, "localcore_core_unload_model");
         core->infer = symbol<infer_fn>(core->library, "localcore_core_infer");
+        core->infer2 = optional_symbol<infer2_fn>(core->library, "localcore_core_infer2");
         core->cancel = symbol<cancel_fn>(core->library, "localcore_core_cancel");
         core->free_string = symbol<free_string_fn>(core->library, "localcore_core_free_string");
         char * error = nullptr;
@@ -196,6 +225,51 @@ Java_com_localcore_runtime_NativeRuntime_nativeInfer(
         char * error = nullptr;
         if (core->infer(core->instance, json.c_str(), callback == nullptr ? nullptr : emit_token,
                         &state, &result, &error) != 0) {
+            if (env->ExceptionCheck()) return nullptr;
+            throw std::runtime_error(take(core, error));
+        }
+        std::string output = take(core, result);
+        return java_string(env, output.data(), output.size());
+    } catch (const std::exception & error) {
+        if (!env->ExceptionCheck()) throw_java(env, error.what());
+        return nullptr;
+    }
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_localcore_runtime_NativeRuntime_nativeInfer2(
+        JNIEnv * env, jclass, jlong handle, jstring request, jobject token_callback, jobject progress_callback) {
+    try {
+        Core * core = from(handle);
+        std::lock_guard<std::mutex> lock(core->operation);
+        std::string json = utf8(env, request);
+        CallbackState token_state{env, token_callback, nullptr};
+        if (token_callback != nullptr) {
+            jclass type = env->GetObjectClass(token_callback);
+            token_state.method = env->GetMethodID(type, "onToken", "(Ljava/lang/String;)Z");
+            env->DeleteLocalRef(type);
+            if (token_state.method == nullptr) throw std::runtime_error("TokenConsumer.onToken 方法不存在");
+        }
+        ProgressState progress_state{env, progress_callback, nullptr};
+        if (progress_callback != nullptr) {
+            jclass type = env->GetObjectClass(progress_callback);
+            progress_state.method = env->GetMethodID(type, "onProgress", "(Ljava/lang/String;II)V");
+            env->DeleteLocalRef(type);
+            if (progress_state.method == nullptr) throw std::runtime_error("ProgressConsumer.onProgress 方法不存在");
+        }
+        char * result = nullptr;
+        char * error = nullptr;
+        int code;
+        if (core->infer2 != nullptr) {
+            code = core->infer2(core->instance, json.c_str(),
+                    token_callback == nullptr ? nullptr : emit_token, &token_state,
+                    progress_callback == nullptr ? nullptr : emit_progress, &progress_state,
+                    &result, &error);
+        } else {
+            code = core->infer(core->instance, json.c_str(),
+                    token_callback == nullptr ? nullptr : emit_token, &token_state, &result, &error);
+        }
+        if (code != 0) {
             if (env->ExceptionCheck()) return nullptr;
             throw std::runtime_error(take(core, error));
         }

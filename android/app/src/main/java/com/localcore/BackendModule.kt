@@ -9,6 +9,7 @@ import android.net.Uri
 import com.facebook.react.bridge.ActivityEventListener
 import com.facebook.react.bridge.BaseActivityEventListener
 import com.facebook.react.bridge.Promise
+import com.facebook.react.bridge.ReadableArray
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
@@ -138,34 +139,104 @@ class BackendModule(private val reactContext: ReactApplicationContext) :
 
   @ReactMethod
   fun chatStream(modelId: String, prompt: String, imageUriString: String?, maxImagePixels: Int?, promise: Promise) {
+    val images = if (imageUriString == null) emptyList() else listOf(imageUriString)
     runAsync(promise, "CHAT_FAILED") {
-      if (imageUriString == null) {
-        streamChat(modelId, prompt, null)
-      } else {
-        // MediaResolver 只接受 data:base64 或 URL 能直接打开的地址，content:// 必须先落到缓存文件再转 file://。
-        // 压缩只走测试端这条路，后端 HTTP 服务与模型导入不受影响。
-        emitStage("图片拷贝开始")
-        val cached = copyUriToCache(Uri.parse(imageUriString), maxImagePixels)
-        try {
-          if (cached.note != null) emitStage(cached.note)
-          else emitStage("图片拷贝完成" + cached.file.length() + "字节")
-          streamChat(modelId, prompt, cached.file.toURI().toString())
-        } finally {
-          cached.file.delete()
-        }
+      streamChatWithUris(modelId, prompt, images, maxImagePixels)
+    }
+  }
+
+  @ReactMethod
+  fun chatStreamMulti(modelId: String, prompt: String, imageUris: ReadableArray?, maxImagePixels: Int?, promise: Promise) {
+    val images = mutableListOf<String>()
+    if (imageUris != null) {
+      for (i in 0 until imageUris.size()) {
+        val value = imageUris.getString(i)
+        if (!value.isNullOrEmpty()) images.add(value)
+      }
+    }
+    runAsync(promise, "CHAT_FAILED") {
+      streamChatWithUris(modelId, prompt, images, maxImagePixels)
+    }
+  }
+
+  @ReactMethod
+  fun prepareChatImage(uriString: String, maxImagePixels: Int?, promise: Promise) {
+    runAsync(promise, "PREPARE_IMAGE_FAILED") {
+      val source = Uri.parse(uriString) ?: throw IllegalArgumentException("图片地址无效")
+      val directory = storedImageDir()
+      val raw = copyUriToFile(source, directory, "chat-stored-")
+      if (maxImagePixels == null || maxImagePixels <= 0) return@runAsync raw.toURI().toString()
+      val prepared = downscaleIfNeeded(raw, maxImagePixels)
+      if (prepared.note != null) emitStage(prepared.note)
+      prepared.file.toURI().toString()
+    }
+  }
+
+  @ReactMethod
+  fun deleteStoredImage(uriString: String, promise: Promise) {
+    runAsync(promise, "DELETE_IMAGE_FAILED") {
+      val uri = Uri.parse(uriString) ?: throw IllegalArgumentException("图片地址无效")
+      if (uri.scheme != "file") throw IllegalArgumentException("非存入图片，无需删除: " + uriString)
+      val path = uri.path ?: throw IllegalArgumentException("图片路径无效")
+      val target = java.io.File(path)
+      val directory = storedImageDir()
+      val dirPath = directory.canonicalPath + java.io.File.separator
+      val targetPath = try {
+        target.canonicalPath
+      } catch (_: Exception) {
+        target.absolutePath
+      }
+      if (!targetPath.startsWith(dirPath)) throw IllegalArgumentException("拒绝删除存图目录之外的文件")
+      if (target.isFile && !target.delete()) throw IllegalStateException("图片删除失败: " + targetPath)
+      null
+    }
+  }
+
+  private fun storedImageDir(): java.io.File {
+    val directory = java.io.File(reactContext.filesDir, "chat-images")
+    if (!directory.isDirectory && !directory.mkdirs()) {
+      throw IllegalStateException("无法创建图片存入目录: " + directory)
+    }
+    return directory
+  }
+
+  private fun streamChatWithUris(modelId: String, prompt: String, imageUris: List<String>, maxPixels: Int?): String {
+    if (imageUris.isEmpty()) {
+      return streamChat(modelId, prompt, null)
+    }
+    // MediaResolver 只接受 data:base64 或 URL 能直接打开的地址，content:// 必须先落到缓存文件再转 file://。
+    // 压缩只走测试端这条路，后端 HTTP 服务与模型导入不受影响。
+    // 存入文件已在选择时按预算压缩，这里再走一次拷贝+压缩作为统一安全网（已达标会直接复用，不二次损伤）。
+    emitStage("图片拷贝开始(共" + imageUris.size + "张)")
+    val cached = imageUris.map { copyUriToCache(Uri.parse(it), maxPixels) }
+    try {
+      for (item in cached) {
+        if (item.note != null) emitStage(item.note)
+      }
+      emitStage("图片拷贝完成(共" + cached.size + "张)")
+      return streamChatWithUrls(modelId, prompt, cached.map { it.file.toURI().toString() })
+    } finally {
+      for (item in cached) {
+        item.file.delete()
       }
     }
   }
 
   private fun streamChat(modelId: String, prompt: String, imageUrl: String?): String {
-    val messages = if (imageUrl == null) {
+    return streamChatWithUrls(modelId, prompt, if (imageUrl == null) emptyList() else listOf(imageUrl))
+  }
+
+  private fun streamChatWithUrls(modelId: String, prompt: String, imageUrls: List<String>): String {
+    val messages = if (imageUrls.isEmpty()) {
       org.json.JSONArray().put(
           org.json.JSONObject().put("role", "user").put("content", prompt))
     } else {
       val content = org.json.JSONArray()
           .put(org.json.JSONObject().put("type", "text").put("text", prompt))
-          .put(org.json.JSONObject().put("type", "image_url")
-              .put("image_url", org.json.JSONObject().put("url", imageUrl)))
+      for (url in imageUrls) {
+        content.put(org.json.JSONObject().put("type", "image_url")
+            .put("image_url", org.json.JSONObject().put("url", url)))
+      }
       org.json.JSONArray().put(
           org.json.JSONObject().put("role", "user").put("content", content))
     }
@@ -177,7 +248,11 @@ class BackendModule(private val reactContext: ReactApplicationContext) :
           emitter.emit("LocalCoreChatToken", token)
           true
         },
-        RuntimeManager.StageListener { stage -> emitStage(stage) })
+        RuntimeManager.StageListener { stage -> emitStage(stage) },
+        RuntimeManager.ProgressListener { phase, done, total ->
+          emitter.emit("LocalCoreChatProgress",
+              mapOf("phase" to phase, "done" to done, "total" to total))
+        })
     return org.json.JSONObject()
         .put("text", result.text)
         .put("promptTokens", result.promptTokens)
@@ -197,18 +272,23 @@ class BackendModule(private val reactContext: ReactApplicationContext) :
 
   private data class CachedImage(val file: java.io.File, val note: String?)
 
-  private fun copyUriToCache(uri: android.net.Uri, maxPixels: Int?): CachedImage {
-    val directory = java.io.File(reactContext.cacheDir, "chat-images")
+  private fun copyUriToFile(uri: android.net.Uri, directory: java.io.File, prefix: String): java.io.File {
     if (!directory.isDirectory && !directory.mkdirs()) {
-      throw IllegalStateException("无法创建图片缓存目录: " + directory)
+      throw IllegalStateException("无法创建图片目录: " + directory)
     }
-    val target = java.io.File.createTempFile("chat-img-", ".bin", directory)
+    val target = java.io.File.createTempFile(prefix, ".bin", directory)
     reactContext.contentResolver.openInputStream(uri)?.use { input ->
       java.io.FileOutputStream(target).use { output ->
         input.copyTo(output)
         output.fd.sync()
       }
     } ?: throw IllegalStateException("系统未提供图片输入流")
+    return target
+  }
+
+  private fun copyUriToCache(uri: android.net.Uri, maxPixels: Int?): CachedImage {
+    val directory = java.io.File(reactContext.cacheDir, "chat-images")
+    val target = copyUriToFile(uri, directory, "chat-img-")
     if (maxPixels == null || maxPixels <= 0) return CachedImage(target, null)
     return downscaleIfNeeded(target, maxPixels)
   }
