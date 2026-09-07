@@ -236,6 +236,7 @@ export default function App() {
   const [updateProgress, setUpdateProgress] = useState<number | null>(null);
   const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pollActive = useRef(false);
+  const restoreTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [backendInfo, setBackendInfo] = useState<{running: boolean; address: string | null; error: string | null} | null>(null);
   const [backendError, setBackendError] = useState<string | null>(null);
   const [backendLoading, setBackendLoading] = useState(false);
@@ -392,6 +393,10 @@ export default function App() {
       clearTimeout(pollTimer.current);
       pollTimer.current = null;
     }
+    if (restoreTimer.current) {
+      clearTimeout(restoreTimer.current);
+      restoreTimer.current = null;
+    }
   };
 
   const pollUpdate = async () => {
@@ -445,6 +450,13 @@ export default function App() {
           setUpdateProgress(cu.version ? 1 : null);
           fetchCore();
           stopPoll();
+          // 满格蓝只做3秒高亮，之后退回灰色状态条，文字保留。
+          if (cu.version) {
+            restoreTimer.current = setTimeout(() => {
+              setUpdateProgress(null);
+              restoreTimer.current = null;
+            }, 3000);
+          }
           return;
         }
       } catch (e: any) {
