@@ -171,6 +171,7 @@ class BackendModule(private val reactContext: ReactApplicationContext) :
   }
 
   fun emitRuntimeEvent(name: String, payload: String) {
+    android.util.Log.i("Backend", "emit " + name + " " + payload.take(120))
     try {
       reactContext.emitDeviceEvent(name, payload)
     } catch (error: Exception) {

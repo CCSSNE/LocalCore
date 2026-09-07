@@ -19,6 +19,7 @@ function fail(requestId: number, error: unknown) {
 }
 
 async function preloadCore(coreEntry: string) {
+  console.log('preloadCore', coreEntry);
   if (loadedEntry === coreEntry && isLlamaInitialized?.()) return;
   // 抢注：先用绝对路径注册下载的核心 SONAME，
   // llama.rn 的 System.loadLibrary 随后命中已注册库，不再使用 APK 内置库。
@@ -132,6 +133,7 @@ export function startRuntimeService() {
   if (!Backend) throw new Error('原生 Backend 模块不可用');
   const emitter = new NativeEventEmitter(Backend);
   emitter.addListener('LocalCoreRuntime', (payload: string) => {
+    console.log('bridge request', payload?.slice(0, 120));
     const request: RuntimeRequest = JSON.parse(payload);
     handle(request).catch(error => fail(request.requestId, error));
   });
