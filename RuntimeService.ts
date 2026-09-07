@@ -23,7 +23,8 @@ async function preloadCore(coreEntry: string) {
   if (loadedEntry === coreEntry && isLlamaInitialized?.()) return;
   // 抢注：先用绝对路径注册下载的核心 SONAME，
   // llama.rn 的 System.loadLibrary 随后命中已注册库，不再使用 APK 内置库。
-  NativeModules.Backend.preloadCore(coreEntry);
+  await NativeModules.Backend.preloadCore(coreEntry);
+  console.log('preloadCore done');
   loadedEntry = coreEntry;
 }
 
@@ -40,6 +41,7 @@ async function handle(request: RuntimeRequest) {
         await context.release();
         context = null;
       }
+      console.log('initLlama begin');
       context = await initLlama({
         model: request.modelPath,
         n_ctx: request.contextSize,
@@ -47,6 +49,7 @@ async function handle(request: RuntimeRequest) {
         n_threads: request.threads,
         n_gpu_layers: request.gpuLayers,
       });
+      console.log('initLlama done');
       Backend.reply(request.requestId, JSON.stringify({version: 'llama.rn'}));
       break;
     }
