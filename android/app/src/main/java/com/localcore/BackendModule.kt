@@ -22,6 +22,19 @@ class BackendModule(private val reactContext: ReactApplicationContext) :
 
   private var pickPromise: Promise? = null
 
+  private val executor = java.util.concurrent.Executors.newSingleThreadExecutor()
+
+  private fun runAsync(promise: Promise, tag: String, block: () -> Any?) {
+    executor.execute {
+      try {
+        promise.resolve(block())
+      } catch (t: Throwable) {
+        android.util.Log.e("Backend", tag, t)
+        promise.reject(tag, t.message, t)
+      }
+    }
+  }
+
   private val pickListener: ActivityEventListener = object : BaseActivityEventListener() {
     override fun onActivityResult(activity: Activity, requestCode: Int, resultCode: Int, intent: Intent?) {
       if (requestCode != PICK_REQUEST) return
@@ -74,42 +87,33 @@ class BackendModule(private val reactContext: ReactApplicationContext) :
 
   @ReactMethod
   fun importCore(uriString: String, promise: Promise) {
-    try {
+    runAsync(promise, "IMPORT_CORE_FAILED") {
       application.graph.exchange.importCore(Uri.parse(uriString))
-      promise.resolve(application.graph.exchange.currentCoreId())
-    } catch (error: Exception) {
-      promise.reject("IMPORT_CORE_FAILED", error.message, error).also { android.util.Log.e("Backend", "IMPORT_CORE_FAILED", error) }
+      application.graph.exchange.currentCoreId()
     }
   }
 
   @ReactMethod
   fun importModel(uriString: String, promise: Promise) {
-    try {
-      promise.resolve(application.graph.exchange.importModel(Uri.parse(uriString)))
-    } catch (error: Exception) {
-      promise.reject("IMPORT_MODEL_FAILED", error.message, error).also { android.util.Log.e("Backend", "IMPORT_MODEL_FAILED", error) }
+    runAsync(promise, "IMPORT_MODEL_FAILED") {
+      application.graph.exchange.importModel(Uri.parse(uriString))
     }
   }
 
   @ReactMethod
   fun loadModel(modelId: String, promise: Promise) {
-    try {
+    runAsync(promise, "LOAD_FAILED") {
       application.graph.runtime.loadModel(modelId)
-      promise.resolve(null)
-    } catch (error: Exception) {
-      promise.reject("LOAD_FAILED", error.message, error).also { android.util.Log.e("Backend", "LOAD_FAILED", error) }
+      null
     }
   }
 
   @ReactMethod
   fun testChat(modelId: String, prompt: String, promise: Promise) {
-    try {
+    runAsync(promise, "CHAT_FAILED") {
       val messages = org.json.JSONArray().put(
           org.json.JSONObject().put("role", "user").put("content", prompt))
-      val result = application.graph.runtime.chat(messages, org.json.JSONObject(), null)
-      promise.resolve(result.text)
-    } catch (error: Exception) {
-      promise.reject("CHAT_FAILED", error.message, error).also { android.util.Log.e("Backend", "CHAT_FAILED", error) }
+      application.graph.runtime.chat(messages, org.json.JSONObject(), null).text
     }
   }
 
