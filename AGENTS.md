@@ -7,7 +7,9 @@
 
 - 本文档中"仓库"一词均包含 GitHub Release：Release 是仓库的一部分。.gitignore 的产物禁令只约束 git 树，Release 允许上传 SO 等成品，允许从 Release 拉取成品。
 - 用户已删除的文件一律视为废纸：不要查看、不要找回、不要引用其内容，也不要恢复。
-- 本项目唯一的动态核心是 llama.rn 官方 Release 发布的安卓 JNI 库包（llama-rn-android-jni-libs.tar.gz）。导入和更新都以它为准，更新源就是 llama.rn 的 GitHub Release；禁止恢复自产核心路线（runtime.cpp / build-runtime.ps1 / native-api / native_bridge.cpp）。
+- 本项目唯一的动态核心是 llama.rn（npm 官方包及其 GitHub Release）。APP 是真 React Native 应用，推理全能力（Jinja 模板、工具调用、thinking）走 llama.rn 的 JS 接口层。
+- 动态核心以文件形式导入导出，机制是抢注：导入的 librnllama*.so 先用 Runtime.load 注册 SONAME，llama.rn 的 System.loadLibrary 随后命中已注册库。仅当 llama.rn 的加载链（库名/加载方式/SONAME/JSI 接口）变化时才适配并重编 APK；其余更新直接白嫖官方 npm/Release，不重编核心、不维护自建桥。
+- 禁止恢复自建推理桥或自产核心（native_bridge.cpp / llama_jni.cpp / runtime.cpp / 自建 C API）。禁止把核心 SO 内置进 APK。
 
 
 ## 工作原则
