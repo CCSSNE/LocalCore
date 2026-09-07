@@ -77,6 +77,7 @@ export default function App() {
   const [busy, setBusy] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [draft, setDraft] = useState('');
+  const [pendingImage, setPendingImage] = useState<string | null>(null);
   const [modelList, setModelList] = useState<ModelEntry[] | null>(null);
   const [modelError, setModelError] = useState<string | null>(null);
   const [listLoading, setListLoading] = useState(false);
@@ -220,21 +221,33 @@ export default function App() {
       fetchBackend();
     });
 
+  const pickImage = () =>
+    run(
+      '选择图片',
+      pickAnd('选择图片', async uri => {
+        setPendingImage(uri);
+        return uri;
+      }),
+    );
+
   const sendChat = () => {
     const prompt = draft.trim();
-    if (!prompt || busy) return;
+    if ((!prompt && !pendingImage) || busy) return;
+    const image = pendingImage;
     setDraft('');
-    setMessages(prev => [...prev, {role: 'user', text: prompt}]);
+    setMessages(prev => [...prev, {role: 'user', text: prompt + (image ? ' [图片]' : '')}]);
     const label = '聊天推理';
     setBusy(label);
-    push('info', '>> ' + label + '：' + prompt);
+    push('info', '>> ' + label + '：' + prompt + (image ? ' [图片]' : ''));
     (async () => {
       const id = await firstModelId();
+      if (image) return Backend.testChatWithImage(id, prompt, image);
       return Backend.testChat(id, prompt);
     })()
       .then((value: any) => {
         const text = String(value ?? '');
         setMessages(prev => [...prev, {role: 'ai', text}]);
+        if (image) setPendingImage(null);
         push('ok', 'OK ' + label + ' => ' + text);
       })
       .catch((error: Error) => {
@@ -307,7 +320,20 @@ export default function App() {
           </View>
         ) : null}
       </ScrollView>
+      {pendingImage !== null ? (
+        <View style={styles.pendingBar}>
+          <Text style={styles.pendingText} numberOfLines={1}>
+            已选图片：{pendingImage}
+          </Text>
+          <TouchableOpacity onPress={() => setPendingImage(null)} style={styles.pendingRemove}>
+            <Text>移除</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
       <View style={styles.inputBar}>
+        <TouchableOpacity onPress={pickImage} disabled={!!busy} style={styles.iconBtn}>
+          <Text style={styles.iconText}>🖼️</Text>
+        </TouchableOpacity>
         <TextInput
           style={styles.input}
           value={draft}
@@ -317,9 +343,9 @@ export default function App() {
           multiline
         />
         <TouchableOpacity
-          style={[styles.sendBtn, (!draft.trim() || busy) && styles.sendBtnDisabled]}
+          style={[styles.sendBtn, ((!draft.trim() && !pendingImage) || busy) && styles.sendBtnDisabled]}
           onPress={sendChat}
-          disabled={!draft.trim() || !!busy}>
+          disabled={(!draft.trim() && !pendingImage) || !!busy}>
           <Text style={styles.sendText}>发送</Text>
         </TouchableOpacity>
       </View>
@@ -649,7 +675,18 @@ const styles = StyleSheet.create({
   bubbleError: {backgroundColor: '#fdecea', alignSelf: 'flex-start', borderWidth: 1, borderColor: '#b00020'},
   bubbleAiText: {color: '#111111'},
   bubbleUserText: {color: '#ffffff'},
-  inputBar: {flexDirection: 'row', padding: 10, borderTopWidth: 1, borderTopColor: '#e5e5e5', alignItems: 'flex-end'},
+  inputBar: {flexDirection: 'row', padding: 10, paddingLeft: 2, borderTopWidth: 1, borderTopColor: '#e5e5e5', alignItems: 'flex-end'},
+  pendingBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderTopWidth: 1,
+    borderTopColor: '#e5e5e5',
+    backgroundColor: '#f7f7f7',
+  },
+  pendingText: {flex: 1, fontSize: 12, color: '#333333'},
+  pendingRemove: {paddingHorizontal: 8, paddingVertical: 4},
   input: {
     flex: 1,
     borderWidth: 1,
@@ -676,7 +713,7 @@ const styles = StyleSheet.create({
   drawerText: {fontSize: 15, color: '#333333'},
   drawerTextActive: {color: '#1a3faa', fontWeight: '700'},
   drawerFoot: {marginTop: 24, marginLeft: 8, fontSize: 12, color: '#999999'},
-  menuMask: {flex: 1, backgroundColor: 'rgba(0,0,0,0.15)'},
+  menuMask: {flex: 1, backgroundColor: 'transparent'},
   menu: {position: 'absolute', top: 92, right: 8, backgroundColor: '#ffffff', borderRadius: 10, borderWidth: 1, borderColor: '#e0e0e0', minWidth: 170, paddingVertical: 6, elevation: 4},
   menuItem: {paddingVertical: 12, paddingHorizontal: 16},
 });
