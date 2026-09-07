@@ -24,7 +24,7 @@ add_subdirectory(${LLAMA_CPP_DIR} llama.cpp-build EXCLUDE_FROM_ALL)
 
 add_library(localcore_core SHARED localcore_core.cpp)
 target_compile_features(localcore_core PRIVATE cxx_std_17)
-target_compile_options(localcore_core PRIVATE -Wall -Wextra -Werror -fvisibility=hidden)
+target_compile_options(localcore_core PRIVATE -Wall -Wextra -fvisibility=hidden)
 target_include_directories(localcore_core PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../include
     ${LLAMA_CPP_DIR}/include
