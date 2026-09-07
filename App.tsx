@@ -733,7 +733,6 @@ export default function App() {
                 </Text>
               </TouchableOpacity>
             ))}
-            <Text style={styles.drawerFoot}>薄 Loader → 可更新核心</Text>
           </Pressable>
         </Pressable>
       </Modal>
@@ -779,36 +778,35 @@ const styles = StyleSheet.create({
   headerTitle: {fontSize: 17, fontWeight: 'bold', color: '#111111'},
   iconBtn: {width: 44, height: 44, alignItems: 'center', justifyContent: 'center'},
   iconText: {fontSize: 22, color: '#111111'},
-  imgIcon: {width: 26, height: 22, borderWidth: 1.5, borderColor: '#666666', borderRadius: 4},
+  imgIcon: {width: 26, height: 22, borderWidth: 2, borderColor: '#666666', borderRadius: 6},
   imgSun: {
     position: 'absolute',
-    top: 3,
-    left: 4,
-    width: 5,
-    height: 5,
-    borderRadius: 2.5,
-    borderWidth: 1.2,
-    borderColor: '#666666',
+    top: 5,
+    left: 6,
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#666666',
   },
   imgPeakLeft: {
     position: 'absolute',
     left: 2,
-    bottom: 3,
-    width: 10,
+    top: 12,
+    width: 13,
     height: 2,
     borderRadius: 1,
     backgroundColor: '#666666',
-    transform: [{rotate: '35deg'}],
+    transform: [{rotate: '-45deg'}],
   },
   imgPeakRight: {
     position: 'absolute',
-    right: 2,
-    bottom: 3,
-    width: 10,
+    left: 11,
+    top: 12,
+    width: 13,
     height: 2,
     borderRadius: 1,
     backgroundColor: '#666666',
-    transform: [{rotate: '-35deg'}],
+    transform: [{rotate: '45deg'}],
   },
   headerAction: {minWidth: 44, height: 44, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 8},
   headerActionText: {fontSize: 15, color: '#1a3faa'},
@@ -907,7 +905,6 @@ const styles = StyleSheet.create({
   drawerItemActive: {backgroundColor: '#e8eefc'},
   drawerText: {fontSize: 15, color: '#333333'},
   drawerTextActive: {color: '#1a3faa', fontWeight: '700'},
-  drawerFoot: {marginTop: 24, marginLeft: 8, fontSize: 12, color: '#999999'},
   menuLayer: {
     position: 'absolute',
     top: 0,
