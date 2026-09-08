@@ -5,7 +5,6 @@ import android.net.Uri;
 import android.os.ParcelFileDescriptor;
 
 import com.localcore.config.ConfigRepository;
-import com.localcore.config.HotSettings;
 import com.localcore.diagnostics.EventLog;
 import com.localcore.io.ExternalFile;
 import com.localcore.resource.ResourceManager;
@@ -286,17 +285,19 @@ public final class RuntimeManager {
     // 与模型解绑后不再读模型配置；存量 inference 块留着不动但也不再看。
     private void applyModelDefaults(JSONObject body) throws org.json.JSONException {
         JSONObject hot = hotDefaults;
-        putDefault(body, "max_tokens", hot.opt("maxTokens"));
-        putDefault(body, "temperature", hot.opt("temperature"));
-        putDefault(body, "top_p", hot.opt("topP"));
-        putDefault(body, "top_k", hot.opt("topK"));
-        putDefault(body, "seed", hot.opt("seed"));
-        putDefault(body, "stop", hot.optJSONArray("stop"));
-        JSONObject extra = HotSettings.fromConfig(config.current());
-        java.util.Iterator<String> keys = extra.keys();
+        java.util.Iterator<String> keys = hot.keys();
         while (keys.hasNext()) {
-            String key = keys.next();
-            if (!body.has(key)) body.put(key, extra.opt(key));
+            String configuredKey = keys.next();
+            putDefault(body, requestKey(configuredKey), hot.opt(configuredKey));
+        }
+    }
+
+    private static String requestKey(String key) {
+        switch (key) {
+            case "maxTokens": return "max_tokens";
+            case "topP": return "top_p";
+            case "topK": return "top_k";
+            default: return key;
         }
     }
 

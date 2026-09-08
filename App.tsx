@@ -10,6 +10,7 @@ import {
   ScrollView,
   StatusBar,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   TouchableOpacity,
@@ -23,7 +24,9 @@ const {Backend} = NativeModules;
 const chatEvents = new NativeEventEmitter(NativeModules.Backend);
 const CHAT_KEY = 'localcore.chat.v1';
 const SETTINGS_KEY = 'localcore.settings.v1';
+const HOT_CONTROL_STATE_KEY = 'localcore.hot-control-values.v1';
 const DEFAULT_BUDGET_PX = 100000;
+const EMPTY_HOT_DEFINITION = JSON.stringify({controls: []}, null, 2);
 
 type RouteKey = 'chat' | 'core' | 'model' | 'download' | 'backend' | 'log';
 
@@ -222,17 +225,57 @@ const hotToForm = (hot: Record<string, any>): Record<string, string> => {
   return form;
 };
 
-const extraHotEntries = (text: string): Array<{key: string; value: any}> => {
+type HotControl =
+  | {id: string; label: string; type: 'toggle'; default: 'on' | 'off'; states: {on: {label: string; params: Record<string, any>}; off: {label: string; params: Record<string, any>}}}
+  | {id: string; label: string; type: 'select'; default: string; options: Array<{value: string; label: string; params: Record<string, any>}>}
+  | {id: string; label: string; type: 'input'; valueType: 'number' | 'text'; default: number | string; bind: Record<string, '$value'>};
+
+type HotControlValues = Record<string, string | number>;
+
+const parseHotDefinitions = (text: string): HotControl[] => {
   const value = JSON.parse(text);
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error('额外热设置必须是 JSON 对象');
+  if (value === null || typeof value !== 'object' || Array.isArray(value) || !Array.isArray(value.controls)) {
+    throw new Error('hotSettings 必须是包含 controls 数组的 JSON 对象');
   }
-  return Object.keys(value).map(key => ({key, value: value[key]}));
+  return value.controls as HotControl[];
 };
 
-const displayJsonValue = (value: any): string => {
-  const text = JSON.stringify(value);
-  return text === undefined ? String(value) : text;
+const defaultHotControlValues = (controls: HotControl[]): HotControlValues => {
+  const values: HotControlValues = {};
+  controls.forEach(control => {
+    values[control.id] = control.default;
+  });
+  return values;
+};
+
+const hotControlValueValid = (control: HotControl, value: any): boolean => {
+  if (control.type === 'toggle') return value === 'on' || value === 'off';
+  if (control.type === 'select') return control.options.some(option => option.value === value);
+  return control.valueType === 'number'
+    ? typeof value === 'number' && Number.isFinite(value)
+    : typeof value === 'string';
+};
+
+const mappedHotParams = (controls: HotControl[], values: HotControlValues): Record<string, any> => {
+  const mapped: Record<string, any> = {};
+  controls.forEach(control => {
+    const value = values[control.id];
+    if (!hotControlValueValid(control, value)) {
+      throw new Error(`热设置控件 ${control.id} 的当前值无效`);
+    }
+    if (control.type === 'toggle') {
+      Object.assign(mapped, control.states[value as 'on' | 'off'].params);
+    } else if (control.type === 'select') {
+      const option = control.options.find(item => item.value === value);
+      if (!option) throw new Error(`热设置控件 ${control.id} 的选项不存在`);
+      Object.assign(mapped, option.params);
+    } else {
+      Object.keys(control.bind).forEach(key => {
+        mapped[key] = value;
+      });
+    }
+  });
+  return mapped;
 };
 
 export default function App() {
@@ -273,9 +316,12 @@ export default function App() {
     ready: false,
   });
   const [rightOpen, setRightOpen] = useState(false);
-  const [extraHotJson, setExtraHotJson] = useState('{}');
+  const [hotDefinitionJson, setHotDefinitionJson] = useState(EMPTY_HOT_DEFINITION);
+  const [hotControls, setHotControls] = useState<HotControl[]>([]);
+  const [hotControlValues, setHotControlValues] = useState<HotControlValues>({});
+  const [hotInputText, setHotInputText] = useState<Record<string, string>>({});
   const [extraHotOpen, setExtraHotOpen] = useState(false);
-  const [extraHotDraft, setExtraHotDraft] = useState('{}');
+  const [extraHotDraft, setExtraHotDraft] = useState(EMPTY_HOT_DEFINITION);
   const [extraHotError, setExtraHotError] = useState<string | null>(null);
   const [coreRt, setCoreRt] = useState<{cuPhase: string | null; cuError: string | null}>({
     cuPhase: null,
@@ -383,9 +429,16 @@ export default function App() {
     );
   };
 
-  const applyHot = (hot: Record<string, any>) => {
+  const persistHotControlValues = (values: HotControlValues) => {
+    AsyncStorage.setItem(HOT_CONTROL_STATE_KEY, JSON.stringify(values)).catch((e: any) =>
+      push('fail', 'FAIL 保存热设置控件状态 => ' + (e?.message ?? String(e))),
+    );
+  };
+
+  const applyHot = (hot: Record<string, any>, controls = hotControls, values = hotControlValues) => {
     hotNums.current = {...hot};
-    Backend.setHotParams(JSON.stringify(hot)).catch((e: any) =>
+    const merged = {...hot, ...mappedHotParams(controls, values)};
+    Backend.setHotParams(JSON.stringify(merged)).catch((e: any) =>
       push('fail', 'FAIL 设置热参数 => ' + (e?.message ?? String(e))),
     );
   };
@@ -421,10 +474,34 @@ export default function App() {
       })
       .catch((e: any) => push('fail', 'FAIL 读取设置文件 => ' + (e?.message ?? String(e))));
     Backend.getHotSettings()
-      .then((raw: any) => {
-        const text = String(raw ?? '{}');
-        extraHotEntries(text);
-        setExtraHotJson(text);
+      .then(async (raw: any) => {
+        const text = String(raw ?? EMPTY_HOT_DEFINITION);
+        const controls = parseHotDefinitions(text);
+        const savedRaw = await AsyncStorage.getItem(HOT_CONTROL_STATE_KEY);
+        let saved: Record<string, any> = {};
+        if (savedRaw != null) {
+          const parsed = JSON.parse(savedRaw);
+          if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+            throw new Error('热设置控件状态必须是 JSON 对象');
+          }
+          saved = parsed;
+        }
+        const values = defaultHotControlValues(controls);
+        controls.forEach(control => {
+          if (Object.prototype.hasOwnProperty.call(saved, control.id)) {
+            if (hotControlValueValid(control, saved[control.id])) {
+              values[control.id] = saved[control.id];
+            } else {
+              push('fail', `FAIL 热设置控件 ${control.id} 的持久化值已失效，已要求重新选择`);
+            }
+          }
+        });
+        setHotDefinitionJson(text);
+        setHotControls(controls);
+        setHotControlValues(values);
+        setHotInputText(Object.fromEntries(controls.filter(control => control.type === 'input').map(control => [control.id, String(values[control.id])] )));
+        persistHotControlValues(values);
+        applyHot(hotNums.current, controls, values);
       })
       .catch((e: any) => push('fail', 'FAIL 读取额外热设置 => ' + (e?.message ?? String(e))));
   };
@@ -1053,29 +1130,40 @@ export default function App() {
   };
 
   const openExtraHotSettings = () => {
-    setExtraHotDraft(extraHotJson);
+    setExtraHotDraft(hotDefinitionJson);
     setExtraHotError(null);
     setExtraHotOpen(true);
   };
 
   const closeExtraHotSettings = () => {
     setExtraHotOpen(false);
-    setExtraHotDraft(extraHotJson);
+    setExtraHotDraft(hotDefinitionJson);
     setExtraHotError(null);
   };
 
   const saveExtraHotSettings = () => {
     let formatted = '';
+    let nextControls: HotControl[] = [];
     setExtraHotError(null);
     run(
-      '保存额外热设置',
+      '保存额外热设置定义',
       async () => {
         formatted = String(await Backend.setHotSettings(extraHotDraft));
-        extraHotEntries(formatted);
+        nextControls = parseHotDefinitions(formatted);
         return formatted;
       },
       () => {
-        setExtraHotJson(formatted);
+        const nextValues = defaultHotControlValues(nextControls);
+        nextControls.forEach(control => {
+          const previous = hotControlValues[control.id];
+          if (previous !== undefined && hotControlValueValid(control, previous)) nextValues[control.id] = previous;
+        });
+        setHotDefinitionJson(formatted);
+        setHotControls(nextControls);
+        setHotControlValues(nextValues);
+        setHotInputText(Object.fromEntries(nextControls.filter(control => control.type === 'input').map(control => [control.id, String(nextValues[control.id])] )));
+        persistHotControlValues(nextValues);
+        applyHot(hotNums.current, nextControls, nextValues);
         setExtraHotDraft(formatted);
         setExtraHotOpen(false);
       },
@@ -1634,6 +1722,75 @@ export default function App() {
     return <View style={styles.headerAction} />;
   };
 
+  const updateHotControlValue = (control: HotControl, value: string | number) => {
+    if (!hotControlValueValid(control, value)) {
+      push('fail', `FAIL 热设置控件 ${control.id} 的值无效`);
+      return;
+    }
+    const next = {...hotControlValues, [control.id]: value};
+    setHotControlValues(next);
+    if (control.type === 'input') setHotInputText(prev => ({...prev, [control.id]: String(value)}));
+    persistHotControlValues(next);
+    applyHot(hotNums.current, hotControls, next);
+  };
+
+  const renderHotControl = (control: HotControl) => {
+    const value = hotControlValues[control.id];
+    if (control.type === 'toggle') {
+      const state = value === 'on' ? control.states.on : control.states.off;
+      return (
+        <View key={control.id} style={styles.hotControlRow}>
+          <View style={styles.hotControlLabel}>
+            <Text style={styles.hint}>{control.label}</Text>
+            <Text style={styles.hotControlState}>{state.label}</Text>
+          </View>
+          <Switch value={value === 'on'} onValueChange={enabled => updateHotControlValue(control, enabled ? 'on' : 'off')} />
+        </View>
+      );
+    }
+    if (control.type === 'select') {
+      const selected = control.options.find(option => option.value === value) ?? control.options[0];
+      return (
+        <View key={control.id} style={styles.hotControlRow}>
+          <Text style={styles.hotControlLabel}>{control.label}</Text>
+          <TouchableOpacity
+            style={styles.hotSelectButton}
+            onPress={() => Alert.alert(control.label, undefined, [
+              ...control.options.map(option => ({text: option.label, onPress: () => updateHotControlValue(control, option.value)})),
+              {text: '取消', style: 'cancel'},
+            ])}>
+            <Text style={styles.hotSelectText}>{selected.label}</Text>
+          </TouchableOpacity>
+        </View>
+      );
+    }
+    return (
+      <View key={control.id} style={styles.hotInputRow}>
+        <Text style={styles.hotInputLabel}>{control.label}</Text>
+        <TextInput
+          value={hotInputText[control.id] ?? String(value ?? '')}
+          onChangeText={text => {
+            setHotInputText(prev => ({...prev, [control.id]: text}));
+            if (control.valueType === 'text') updateHotControlValue(control, text);
+          }}
+          onEndEditing={event => {
+            if (control.valueType === 'number') {
+              const number = Number(event.nativeEvent.text.trim());
+              if (Number.isFinite(number)) updateHotControlValue(control, number);
+              else {
+                push('fail', `FAIL ${control.label} 必须是数字`);
+                setHotInputText(prev => ({...prev, [control.id]: String(value ?? control.default)}));
+              }
+            }
+          }}
+          keyboardType={control.valueType === 'number' ? 'numeric' : 'default'}
+          placeholderTextColor="#999999"
+          style={styles.settingsInput}
+        />
+      </View>
+    );
+  };
+
   return (
     <View style={styles.root}>
       <View style={styles.header}>
@@ -1792,7 +1949,7 @@ export default function App() {
         onRequestClose={closeExtraHotSettings}>
         <Pressable style={styles.settingsMask} onPress={closeExtraHotSettings}>
           <Pressable style={styles.extraHotCard} onPress={e => e.stopPropagation()}>
-            <Text style={styles.settingsTitle}>额外热设置 JSON</Text>
+            <Text style={styles.settingsTitle}>编辑额外热设置定义</Text>
             <TextInput
               value={extraHotDraft}
               onChangeText={setExtraHotDraft}
@@ -1844,12 +2001,7 @@ export default function App() {
                 placeholderTextColor="#999999"
                 style={styles.settingsInput}
               />
-              {extraHotEntries(extraHotJson).map(entry => (
-                <View key={entry.key} style={styles.extraHotRow}>
-                  <Text style={styles.hint}>{entry.key}</Text>
-                  <Text style={styles.extraHotValue} selectable>{displayJsonValue(entry.value)}</Text>
-                </View>
-              ))}
+              {hotControls.map(renderHotControl)}
               <TouchableOpacity style={[styles.btn, styles.addHotBtn]} onPress={openExtraHotSettings}>
                 <Text>新增热设置项</Text>
               </TouchableOpacity>
@@ -1942,6 +2094,13 @@ const styles = StyleSheet.create({
   extraHotRow: {borderTopWidth: 1, borderTopColor: '#eeeeee', paddingVertical: 8},
   extraHotValue: {fontFamily: 'monospace', fontSize: 12, color: '#333333', marginTop: 2},
   addHotBtn: {marginTop: 10, marginRight: 0, alignItems: 'center'},
+  hotControlRow: {flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderTopWidth: 1, borderTopColor: '#eeeeee', paddingVertical: 8},
+  hotControlLabel: {flex: 1, color: '#333333'},
+  hotControlState: {fontSize: 12, color: '#777777', marginTop: 2},
+  hotSelectButton: {minWidth: 110, minHeight: 40, borderWidth: 1, borderColor: '#dddddd', borderRadius: 8, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 10},
+  hotSelectText: {color: '#222222'},
+  hotInputRow: {borderTopWidth: 1, borderTopColor: '#eeeeee', paddingTop: 8},
+  hotInputLabel: {fontSize: 13, color: '#666666'},
   tplMask: {flex: 1, backgroundColor: 'rgba(0,0,0,0.3)', alignItems: 'center', justifyContent: 'center'},
   tplCard: {width: '86%', height: '80%', backgroundColor: '#ffffff', borderRadius: 12, padding: 16},
   tplScroll: {flex: 1},
