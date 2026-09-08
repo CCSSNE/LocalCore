@@ -3,6 +3,7 @@ package com.localcore.runtime;
 import android.content.Context;
 
 import com.localcore.config.ConfigRepository;
+import com.localcore.config.HotSettings;
 import com.localcore.diagnostics.EventLog;
 import com.localcore.resource.ResourceManager;
 
@@ -267,6 +268,12 @@ public final class RuntimeManager {
         putDefault(body, "top_k", hot.opt("topK"));
         putDefault(body, "seed", hot.opt("seed"));
         putDefault(body, "stop", hot.optJSONArray("stop"));
+        JSONObject extra = HotSettings.fromConfig(config.current());
+        java.util.Iterator<String> keys = extra.keys();
+        while (keys.hasNext()) {
+            String key = keys.next();
+            if (!body.has(key)) body.put(key, extra.opt(key));
+        }
     }
 
     private static void putDefault(JSONObject body, String key, Object value) throws org.json.JSONException {

@@ -215,6 +215,19 @@ const hotToForm = (hot: Record<string, any>): Record<string, string> => {
   return form;
 };
 
+const extraHotEntries = (text: string): Array<{key: string; value: any}> => {
+  const value = JSON.parse(text);
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('额外热设置必须是 JSON 对象');
+  }
+  return Object.keys(value).map(key => ({key, value: value[key]}));
+};
+
+const displayJsonValue = (value: any): string => {
+  const text = JSON.stringify(value);
+  return text === undefined ? String(value) : text;
+};
+
 export default function App() {
   const [route, setRoute] = useState<RouteKey>('chat');
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -253,6 +266,10 @@ export default function App() {
     ready: false,
   });
   const [rightOpen, setRightOpen] = useState(false);
+  const [extraHotJson, setExtraHotJson] = useState('{}');
+  const [extraHotOpen, setExtraHotOpen] = useState(false);
+  const [extraHotDraft, setExtraHotDraft] = useState('{}');
+  const [extraHotError, setExtraHotError] = useState<string | null>(null);
   const [coreRt, setCoreRt] = useState<{cuPhase: string | null; cuError: string | null}>({
     cuPhase: null,
     cuError: null,
@@ -292,7 +309,7 @@ export default function App() {
     setRightOpen(false);
   };
 
-  const run = (label: string, action: () => Promise<any>, afterOk?: () => void) => {
+  const run = (label: string, action: () => Promise<any>, afterOk?: () => void, afterFail?: (error: Error) => void) => {
     if (busy) {
       push('fail', 'FAIL ' + label + ' => 已有任务进行中: ' + busy + '，请稍候再试');
       return;
@@ -304,7 +321,10 @@ export default function App() {
         push('ok', 'OK ' + label + (value ? ' => ' + String(value) : ''));
         afterOk?.();
       })
-      .catch((error: Error) => push('fail', 'FAIL ' + label + ' => ' + error.message))
+      .catch((error: Error) => {
+        push('fail', 'FAIL ' + label + ' => ' + error.message);
+        afterFail?.(error);
+      })
       .finally(() => setBusy(null));
   };
 
@@ -393,6 +413,13 @@ export default function App() {
         applyHot(hot);
       })
       .catch((e: any) => push('fail', 'FAIL 读取设置文件 => ' + (e?.message ?? String(e))));
+    Backend.getHotSettings()
+      .then((raw: any) => {
+        const text = String(raw ?? '{}');
+        extraHotEntries(text);
+        setExtraHotJson(text);
+      })
+      .catch((e: any) => push('fail', 'FAIL 读取额外热设置 => ' + (e?.message ?? String(e))));
   };
 
   const saveBudget = () => {
@@ -939,6 +966,37 @@ export default function App() {
   const openRightDrawer = () => {
     setHotOrig({...hotForm});
     setRightOpen(true);
+  };
+
+  const openExtraHotSettings = () => {
+    setExtraHotDraft(extraHotJson);
+    setExtraHotError(null);
+    setExtraHotOpen(true);
+  };
+
+  const closeExtraHotSettings = () => {
+    setExtraHotOpen(false);
+    setExtraHotDraft(extraHotJson);
+    setExtraHotError(null);
+  };
+
+  const saveExtraHotSettings = () => {
+    let formatted = '';
+    setExtraHotError(null);
+    run(
+      '保存额外热设置',
+      async () => {
+        formatted = String(await Backend.setHotSettings(extraHotDraft));
+        extraHotEntries(formatted);
+        return formatted;
+      },
+      () => {
+        setExtraHotJson(formatted);
+        setExtraHotDraft(formatted);
+        setExtraHotOpen(false);
+      },
+      error => setExtraHotError(error.message),
+    );
   };
 
   const closeRightDrawer = () => {
@@ -1632,6 +1690,36 @@ export default function App() {
         </Pressable>
       </Modal>
 
+      <Modal
+        visible={extraHotOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={closeExtraHotSettings}>
+        <Pressable style={styles.settingsMask} onPress={closeExtraHotSettings}>
+          <Pressable style={styles.extraHotCard} onPress={e => e.stopPropagation()}>
+            <Text style={styles.settingsTitle}>额外热设置 JSON</Text>
+            <TextInput
+              value={extraHotDraft}
+              onChangeText={setExtraHotDraft}
+              multiline
+              autoCapitalize="none"
+              autoCorrect={false}
+              placeholderTextColor="#999999"
+              style={styles.extraHotInput}
+            />
+            {extraHotError !== null ? <Text style={styles.logFail}>{extraHotError}</Text> : null}
+            <View style={styles.rowBtns}>
+              <TouchableOpacity style={[styles.btn, styles.btnFlex]} onPress={closeExtraHotSettings}>
+                <Text>取消</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.btn, styles.btnFlex, styles.btnLast]} disabled={!!busy} onPress={saveExtraHotSettings}>
+                <Text>保存</Text>
+              </TouchableOpacity>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
       {rightOpen ? (
         <Pressable style={styles.rightMask} onPress={closeRightDrawer}>
           <Pressable
@@ -1661,6 +1749,15 @@ export default function App() {
                 placeholderTextColor="#999999"
                 style={styles.settingsInput}
               />
+              {extraHotEntries(extraHotJson).map(entry => (
+                <View key={entry.key} style={styles.extraHotRow}>
+                  <Text style={styles.hint}>{entry.key}</Text>
+                  <Text style={styles.extraHotValue} selectable>{displayJsonValue(entry.value)}</Text>
+                </View>
+              ))}
+              <TouchableOpacity style={[styles.btn, styles.addHotBtn]} onPress={openExtraHotSettings}>
+                <Text>新增热设置项</Text>
+              </TouchableOpacity>
             </ScrollView>
           </Pressable>
         </Pressable>
@@ -1719,6 +1816,7 @@ const styles = StyleSheet.create({
   headerBtnRow: {flexDirection: 'row', alignItems: 'center'},
   settingsMask: {flex: 1, backgroundColor: 'rgba(0,0,0,0.3)', alignItems: 'center', justifyContent: 'center'},
   settingsCard: {width: 280, backgroundColor: '#ffffff', borderRadius: 12, padding: 16},
+  extraHotCard: {width: '90%', height: '72%', backgroundColor: '#ffffff', borderRadius: 12, padding: 16},
   settingsTitle: {fontSize: 16, fontWeight: 'bold', color: '#111111', marginBottom: 8},
   settingsInput: {
     borderWidth: 1,
@@ -1732,6 +1830,22 @@ const styles = StyleSheet.create({
     textAlignVertical: 'center',
     includeFontPadding: false,
   },
+  extraHotInput: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: '#dddddd',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    minHeight: 160,
+    color: '#111111',
+    textAlignVertical: 'top',
+    includeFontPadding: false,
+    fontFamily: 'monospace',
+  },
+  extraHotRow: {borderTopWidth: 1, borderTopColor: '#eeeeee', paddingVertical: 8},
+  extraHotValue: {fontFamily: 'monospace', fontSize: 12, color: '#333333', marginTop: 2},
+  addHotBtn: {marginTop: 10, marginRight: 0, alignItems: 'center'},
   tplMask: {flex: 1, backgroundColor: 'rgba(0,0,0,0.3)', alignItems: 'center', justifyContent: 'center'},
   tplCard: {width: '86%', height: '80%', backgroundColor: '#ffffff', borderRadius: 12, padding: 16},
   tplScroll: {flex: 1},

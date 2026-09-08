@@ -60,6 +60,7 @@ public final class ConfigRepository {
             if (schemaVersion != 4) {
                 throw new IllegalStateException("不支持的配置 schemaVersion=" + schemaVersion);
             }
+            HotSettings.validateConfig(active);
             if (migrated) AtomicFiles.writeUtf8(activeFile, Jsons.format(active));
             events.info("config", "已加载配置 schemaVersion=" + active.optInt("schemaVersion"));
         } catch (Exception error) {
@@ -78,6 +79,7 @@ public final class ConfigRepository {
 
     public void activate(String text) throws IOException {
         JSONObject candidate = Jsons.parseObject(text, "候选配置");
+        HotSettings.validateConfig(candidate);
         synchronized (this) {
             AtomicFiles.writeUtf8(activeFile, Jsons.format(candidate));
             active = candidate;

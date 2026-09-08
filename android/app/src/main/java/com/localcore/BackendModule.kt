@@ -623,6 +623,20 @@ class BackendModule(private val reactContext: ReactApplicationContext) :
   }
 
   @ReactMethod
+  fun getHotSettings(promise: Promise) {
+    runAsync(promise, "HOT_SETTINGS_FAILED") {
+      application.graph.exchange.hotSettings()
+    }
+  }
+
+  @ReactMethod
+  fun setHotSettings(paramsJson: String, promise: Promise) {
+    runAsync(promise, "HOT_SETTINGS_FAILED") {
+      application.graph.exchange.setHotSettings(paramsJson)
+    }
+  }
+
+  @ReactMethod
   fun checkCoreUpdate(promise: Promise) {
     try {
       application.graph.updates.checkNow()

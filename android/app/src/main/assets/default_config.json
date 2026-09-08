@@ -15,6 +15,7 @@
       "completions": "/v1/completions"
     }
   },
+  "hotSettings": {},
   "coreUpdates": {
     "enabled": true,
     "manifestUrl": "https://github.com/CCSSNE/LocalCore/releases/download/core-stable/core-manifest.json",

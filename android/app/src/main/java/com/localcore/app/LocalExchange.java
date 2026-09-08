@@ -6,6 +6,7 @@ import android.net.Uri;
 import android.provider.OpenableColumns;
 
 import com.localcore.config.ConfigRepository;
+import com.localcore.config.HotSettings;
 import com.localcore.diagnostics.EventLog;
 import com.localcore.io.GgufMeta;
 import com.localcore.resource.ResourceManager;
@@ -337,6 +338,19 @@ public final class LocalExchange {
         model.put("inference", checkedInference(inference));
         config.activate(next.toString());
         events.info("resource", "模型参数已更新 " + modelId + "，加载项下次加载生效");
+    }
+
+    public String hotSettings() {
+        return HotSettings.fromConfig(config.current()).toString();
+    }
+
+    public String setHotSettings(String text) throws Exception {
+        JSONObject extra = HotSettings.parse(text);
+        JSONObject next = config.current();
+        next.put(HotSettings.CONFIG_KEY, extra);
+        config.activate(next.toString());
+        events.info("runtime", "额外热设置已更新");
+        return extra.toString(2);
     }
 
     private void finalizeHfModelContext(String modelId, String revision, File file) throws Exception {
