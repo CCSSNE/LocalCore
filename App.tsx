@@ -8,6 +8,7 @@ import {
   NativeModules,
   Pressable,
   ScrollView,
+  StatusBar,
   StyleSheet,
   Text,
   TextInput,
@@ -1633,14 +1634,9 @@ export default function App() {
       {rightOpen ? (
         <Pressable style={styles.rightMask} onPress={closeRightDrawer}>
           <Pressable
-            style={[styles.rightDrawer, {paddingTop: 8}]}
+            style={[styles.rightDrawer, {paddingTop: (StatusBar.currentHeight ?? 24) + 8}]} // 主界面edge-to-edge从屏幕顶算, H+8与左抽屉顶部对齐
             onPress={e => e.stopPropagation()}>
-            <View style={styles.rightHead}>
-              <Text style={styles.drawerTitle}>推理设置</Text>
-              <TouchableOpacity onPress={closeRightDrawer} style={styles.iconBtn}>
-                <Text style={styles.iconText}>✕</Text>
-              </TouchableOpacity>
-            </View>
+            <Text style={styles.drawerTitle}>推理设置</Text>
             <TouchableOpacity style={[styles.btn, styles.clearBtn]} onPress={clearChat}>
               <Text>清空聊天记录</Text>
             </TouchableOpacity>
