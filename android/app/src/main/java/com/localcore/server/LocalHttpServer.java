@@ -44,21 +44,37 @@ public final class LocalHttpServer {
     }
 
     public synchronized void start() throws IOException {
-        if (socket != null) return;
+        long t0 = System.currentTimeMillis();
+        if (socket != null) {
+            events.info("server", "start跳过: 已在监听 " + address);
+            return;
+        }
+        events.info("server", "开始监听: 读取配置");
         JSONObject server = config.current().optJSONObject("server");
         String host = server.optString("host");
         int port = server.optInt("port");
+        events.info("server", "监听目标 host=" + host + " port=" + port
+                + " elapsedMs=" + (System.currentTimeMillis() - t0));
+        long dns0 = System.currentTimeMillis();
+        InetAddress resolved = InetAddress.getByName(host);
+        events.info("server", "地址解析完成 resolved=" + resolved
+                + " dnsMs=" + (System.currentTimeMillis() - dns0));
         ServerSocket candidate = new ServerSocket();
         candidate.setReuseAddress(true);
-        candidate.bind(new InetSocketAddress(InetAddress.getByName(host), port));
+        long bind0 = System.currentTimeMillis();
+        candidate.bind(new InetSocketAddress(resolved, port));
+        long bindMs = System.currentTimeMillis() - bind0;
         socket = candidate;
         address = "http://" + host + ":" + port;
         acceptThread = new Thread(this::acceptLoop, "localcore-http-accept");
         acceptThread.start();
-        events.info("server", "HTTP 服务已监听 " + address);
+        events.info("server", "HTTP 服务已监听 " + address
+                + " totalElapsedMs=" + (System.currentTimeMillis() - t0) + " bindMs=" + bindMs);
     }
 
     public synchronized void stop() {
+        long t0 = System.currentTimeMillis();
+        events.info("server", "停止监听开始 address=" + address);
         ServerSocket active = socket;
         socket = null;
         address = null;
@@ -68,7 +84,9 @@ public final class LocalHttpServer {
             } catch (IOException error) {
                 events.error("server", "关闭 HTTP 监听失败", error);
             }
-            events.info("server", "HTTP 服务已停止");
+            events.info("server", "HTTP 服务已停止 elapsedMs=" + (System.currentTimeMillis() - t0));
+        } else {
+            events.info("server", "停止监听跳过: 本来就没在监听 elapsedMs=" + (System.currentTimeMillis() - t0));
         }
     }
 

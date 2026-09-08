@@ -693,10 +693,13 @@ class BackendModule(private val reactContext: ReactApplicationContext) :
   @ReactMethod
   fun startService(promise: Promise) {
     try {
+      android.util.Log.i("LocalCoreBackend", "JS startService called(仅投递启动指令, 真正就绪看service分阶段日志)")
       requestNotificationPermissionIfNeeded()
       BackendService.command(reactContext, BackendService.ACTION_START)
+      android.util.Log.i("LocalCoreBackend", "JS startService command已投递, 等待后台线程完成绑定")
       promise.resolve(null)
     } catch (error: Exception) {
+      android.util.Log.e("LocalCoreBackend", "JS startService投递失败", error)
       promise.reject("START_FAILED", error.message, error)
     }
   }

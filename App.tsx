@@ -762,10 +762,39 @@ export default function App() {
       pollUpdate();
     });
 
+  // 启动指令只是投递，后台线程完成图初始化+端口绑定才算就绪：点一下之后轮询等就绪，
+  // 不再靠第二次点击去“补”状态。轮询过程打 info 日志，与原生分阶段日志对照看卡点。
+  const waitBackendRunning = async (tries = 12) => {
+    for (let i = 0; i < tries; i++) {
+      try {
+        const root = JSON.parse(String(await Backend.getBackendState()));
+        if (root?.backend?.running) {
+          await fetchBackend();
+          return true;
+        }
+      } catch {
+        // 状态读失败就继续等，不中断轮询。
+      }
+      push('info', `·· 等待后端就绪…(${(i + 1) * 500}ms)`);
+      await new Promise(r => setTimeout(r, 500));
+    }
+    await fetchBackend();
+    return false;
+  };
+
   const startBackend = () =>
-    run('启动后端服务', () => Backend.startService(), () => {
-      fetchBackend();
-      Backend.isBatteryWhitelisted()
+    run(
+      '启动后端服务',
+      async () => {
+        await Backend.startService();
+        push('info', '·· 启动指令已发送，等待后台线程就绪（分阶段日志见日志屏/通知）…');
+        const ok = await waitBackendRunning();
+        if (!ok) throw new Error('后端仍未就绪，请看通知与日志分阶段耗时后重试');
+        return '后端已就绪';
+      },
+      () => {
+        fetchBackend();
+        Backend.isBatteryWhitelisted()
         .then((whitelisted: boolean) => {
           if (whitelisted) return;
           Alert.alert(
