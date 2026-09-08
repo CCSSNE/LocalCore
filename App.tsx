@@ -765,6 +765,25 @@ export default function App() {
   const startBackend = () =>
     run('启动后端服务', () => Backend.startService(), () => {
       fetchBackend();
+      Backend.isBatteryWhitelisted()
+        .then((whitelisted: boolean) => {
+          if (whitelisted) return;
+          Alert.alert(
+            '保活需要电池优化白名单',
+            '小米/澎湃锁屏后会杀后台，通知也会一起没。去设置把 LocalCore 设为「无限制」，并在最近任务里下滑锁定它。',
+            [
+              {text: '暂不', style: 'cancel'},
+              {
+                text: '去设置',
+                onPress: () =>
+                  Backend.openBatterySettings().catch((e: any) =>
+                    push('fail', 'FAIL 打开设置页 => ' + (e?.message ?? String(e))),
+                  ),
+              },
+            ],
+          );
+        })
+        .catch((e: any) => push('fail', 'FAIL 检查电池白名单 => ' + (e?.message ?? String(e))));
     });
 
   const stopBackend = () =>

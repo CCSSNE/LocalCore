@@ -722,6 +722,35 @@ class BackendModule(private val reactContext: ReactApplicationContext) :
     }
   }
 
+  @ReactMethod
+  fun isBatteryWhitelisted(promise: Promise) {
+    try {
+      val power = reactApplicationContext.getSystemService(android.os.PowerManager::class.java)
+      promise.resolve(power != null && power.isIgnoringBatteryOptimizations(reactApplicationContext.packageName))
+    } catch (error: Exception) {
+      promise.reject("BATTERY_CHECK_FAILED", error.message, error)
+    }
+  }
+
+  @ReactMethod
+  fun openBatterySettings(promise: Promise) {
+    val context = reactApplicationContext
+    val packageUri = android.net.Uri.parse("package:" + context.packageName)
+    val targets = listOf(
+      android.content.Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, packageUri),
+      android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, packageUri))
+    for (intent in targets) {
+      try {
+        intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+        context.startActivity(intent)
+        promise.resolve(true)
+        return
+      } catch (ignored: Exception) {
+      }
+    }
+    promise.reject("SETTINGS_FAILED", "无法打开电池优化设置页")
+  }
+
   companion object {
     private const val PICK_REQUEST = 4701
     private const val SAVE_REQUEST = 4702

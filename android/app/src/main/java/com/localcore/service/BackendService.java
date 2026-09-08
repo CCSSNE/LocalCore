@@ -27,6 +27,7 @@ public final class BackendService extends Service {
     private AppGraph graph;
     private LocalHttpServer server;
     private boolean requested;
+    private int lastStartId;
     private final ConfigRepository.Listener configListener = this::onConfigChanged;
 
     public static void command(Context context, String action) {
@@ -45,6 +46,7 @@ public final class BackendService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        lastStartId = startId;
         startForeground(NOTIFICATION_ID, notification("正在启动"));
         String action = intent == null ? null : intent.getAction();
         if (ACTION_STOP.equals(action)) {
@@ -52,7 +54,7 @@ public final class BackendService extends Service {
             server.stop();
             graph.backend.update(BackendStatus.stopped());
             stopForeground(STOP_FOREGROUND_REMOVE);
-            stopSelf();
+            stopSelfResult(lastStartId);
             return START_NOT_STICKY;
         }
         requested = true;
