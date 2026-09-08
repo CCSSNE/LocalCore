@@ -149,6 +149,25 @@ class BackendModule(private val reactContext: ReactApplicationContext) :
   }
 
   @ReactMethod
+  fun openAllFilesAccessSettings(promise: Promise) {
+    val context = reactApplicationContext
+    val packageUri = android.net.Uri.parse("package:" + context.packageName)
+    val targets = listOf(
+      android.content.Intent(android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, packageUri),
+      android.content.Intent(android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+    for (intent in targets) {
+      try {
+        intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+        context.startActivity(intent)
+        promise.resolve(true)
+        return
+      } catch (ignored: Exception) {
+      }
+    }
+    promise.reject("SETTINGS_FAILED", "无法打开所有文件访问权限设置页")
+  }
+
+  @ReactMethod
   fun loadModel(modelId: String, promise: Promise) {
     runAsync(promise, "LOAD_FAILED") {
       application.graph.runtime.loadModel(modelId)

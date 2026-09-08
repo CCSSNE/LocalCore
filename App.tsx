@@ -723,9 +723,33 @@ export default function App() {
     });
 
   const importExternalModel = () =>
-    run('引用外部模型', pickAnd('引用外部模型', uri => Backend.importModelExternal(uri)), () => {
-      fetchModels();
-    });
+    run(
+      '引用外部模型',
+      pickAnd('引用外部模型', uri => Backend.importModelExternal(uri)),
+      () => {
+        fetchModels();
+      },
+      askAllFilesAccess,
+    );
+
+  const askAllFilesAccess = (error: any) => {
+    const message = error?.message ?? String(error);
+    if (!message.includes('NEED_ALL_FILES_ACCESS')) return;
+    Alert.alert(
+      '需要所有文件访问权限',
+      '直接读取外部模型文件需要开启「所有文件访问权限」，去设置页打开后重试。',
+      [
+        {text: '取消', style: 'cancel'},
+        {
+          text: '去设置',
+          onPress: () =>
+            Backend.openAllFilesAccessSettings().catch((e: any) =>
+              push('fail', 'FAIL 打开设置页 => ' + (e?.message ?? String(e))),
+            ),
+        },
+      ],
+    );
+  };
 
   const importCore = () =>
     run('导入核心', pickAnd('导入核心', uri => Backend.importCore(uri)), () => {
@@ -1388,13 +1412,18 @@ export default function App() {
                 style={[styles.btn, !model.ready && styles.btnDisabled]}
                 disabled={!!busy || !model.ready}
                 onPress={() =>
-                  run('加载模型', () => Backend.loadModel(model.id), () => {
-                    fetchModels();
-                    if (chatReturnAfterLoad.current) {
-                      chatReturnAfterLoad.current = false;
-                      go('chat');
-                    }
-                  })
+                  run(
+                    '加载模型',
+                    () => Backend.loadModel(model.id),
+                    () => {
+                      fetchModels();
+                      if (chatReturnAfterLoad.current) {
+                        chatReturnAfterLoad.current = false;
+                        go('chat');
+                      }
+                    },
+                    askAllFilesAccess,
+                  )
                 }>
                 <Text>加载</Text>
               </TouchableOpacity>

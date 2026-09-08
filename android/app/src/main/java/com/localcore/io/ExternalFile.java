@@ -2,6 +2,8 @@ package com.localcore.io;
 
 import android.content.ContentResolver;
 import android.net.Uri;
+import android.os.Build;
+import android.os.Environment;
 import android.os.ParcelFileDescriptor;
 import android.system.ErrnoException;
 import android.system.Os;
@@ -19,6 +21,12 @@ public final class ExternalFile {
     }
 
     public static ParcelFileDescriptor openRegularFile(ContentResolver resolver, Uri uri) throws Exception {
+        // llama.cpp 在 native 层会按路径重新 open 做 mmap，SAF 授权覆盖不到那次打开，
+        // 共享存储上的裸路径打开必须靠所有文件访问权限，否则 MediaProvider 直接拒绝。
+        if (Build.VERSION.SDK_INT >= 30 && !Environment.isExternalStorageManager()) {
+            throw new IllegalStateException(
+                    "NEED_ALL_FILES_ACCESS: 直接读取外部模型需要「所有文件访问权限」，请开启后重试");
+        }
         ParcelFileDescriptor handle;
         try {
             handle = resolver.openFileDescriptor(uri, "r");
