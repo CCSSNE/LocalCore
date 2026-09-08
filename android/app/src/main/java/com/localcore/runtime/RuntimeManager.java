@@ -257,6 +257,12 @@ public final class RuntimeManager {
                     before.coreId, before.coreVersion, loadedModelId, null));
             long elapsed = System.currentTimeMillis() - startedAt;
             long ttft = firstTokenAt[0] == 0 ? elapsed : firstTokenAt[0] - startedAt;
+            // 全量推理日志：与前端测试页逐字对照，核心输入 body 与全量输出 text 都落盘，不截断。
+            events.info("runtime", "推理完成 kind=" + kind + " model=" + loadedModelId
+                    + " promptTokens=" + response.optInt("promptTokens")
+                    + " completionTokens=" + response.optInt("completionTokens")
+                    + " ttftMs=" + ttft + " llmMs=" + elapsed
+                    + " 请求=" + body + " 输出=" + response.optString("text"));
             return new Result(response.getInt("promptTokens"), response.getInt("completionTokens"),
                     response.getString("text"), response.optJSONObject("message"),
                     response.optBoolean("structured"), ttft, elapsed);
@@ -264,7 +270,7 @@ public final class RuntimeManager {
             RuntimeState before = state();
             setState(new RuntimeState(RuntimeState.Phase.ERROR, before.coreId, before.coreVersion,
                     before.modelId, error.getMessage()));
-            events.error("runtime", "推理失败", error);
+            events.error("runtime", "推理失败 kind=" + kind + " model=" + loadedModelId + " 请求=" + body, error);
             throw asRuntime(error);
         } finally {
             inference.unlock();
