@@ -61,6 +61,18 @@ function formatSize(value: number): string {
   return `${size >= 10 || unit === 0 ? size.toFixed(0) : size.toFixed(1)} ${units[unit]}`;
 }
 
+function formatSpeed(bytesPerSecond: number): string {
+  if (!(bytesPerSecond > 0)) return '0 B/s';
+  const units = ['B/s', 'KB/s', 'MB/s', 'GB/s'];
+  let speed = bytesPerSecond;
+  let unit = 0;
+  while (speed >= 1024 && unit < units.length - 1) {
+    speed /= 1024;
+    unit += 1;
+  }
+  return `${speed >= 10 || unit === 0 ? speed.toFixed(0) : speed.toFixed(1)} ${units[unit]}`;
+}
+
 function formatDate(value: string): string {
   if (!value) return '更新时间未知';
   const date = new Date(value);
@@ -80,6 +92,7 @@ export default function ModelDownloadScreen() {
   const [pairFile, setPairFile] = useState<HfModelFile | null>(null);
   const request = useRef<AbortController | null>(null);
   const autoLoadedSource = useRef<string | null>(null);
+  const speedSamples = useRef(new Map<string, {bytes: number; at: number; speed: number}>());
 
   const refreshState = async (reportError: boolean) => {
     try {
@@ -89,6 +102,24 @@ export default function ModelDownloadScreen() {
         throw new Error('配置中没有 modelDownloads.sources');
       }
       setRoot(value);
+      const now = Date.now();
+      const samples = new Map<string, {bytes: number; at: number; speed: number}>();
+      (value?.resourceStates ?? []).forEach((item: any) => {
+        const id = String(item?.id ?? '');
+        if (!id) return;
+        const bytes = Number(item?.downloaded ?? 0);
+        const previous = speedSamples.current.get(id);
+        let speed = -1;
+        if (previous) {
+          if (bytes >= previous.bytes && now > previous.at) {
+            speed = (bytes - previous.bytes) / ((now - previous.at) / 1000);
+          } else if (bytes >= previous.bytes) {
+            speed = previous.speed;
+          }
+        }
+        samples.set(id, {bytes, at: now, speed});
+      });
+      speedSamples.current = samples;
     } catch (stateError: any) {
       if (reportError) setError(`读取下载配置失败: ${errorText(stateError)}`);
     }
@@ -314,9 +345,14 @@ export default function ModelDownloadScreen() {
     const registration = registrationFor(detail.id, file.path);
     const downloading = resource?.status === 'QUEUED' || resource?.status === 'DOWNLOADING';
     const installed = !!resource?.path && resource.status === 'INSTALLED';
+    const speedSample = resource ? speedSamples.current.get(resource.id) : undefined;
+    const speedText =
+      resource?.status === 'DOWNLOADING' && speedSample && speedSample.speed >= 0
+        ? ` · ${formatSpeed(speedSample.speed)}`
+        : '';
     const progress =
       resource && resource.total > 0
-        ? `${((resource.downloaded / resource.total) * 100).toFixed(1)}% · ${formatSize(resource.downloaded)} / ${formatSize(resource.total)}`
+        ? `${((resource.downloaded / resource.total) * 100).toFixed(1)}% · ${formatSize(resource.downloaded)} / ${formatSize(resource.total)}${speedText}`
         : null;
     const registrationError = registration?.registrationError
       ? String(registration.registrationError)
