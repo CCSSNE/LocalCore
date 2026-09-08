@@ -194,7 +194,7 @@ public final class BackendService extends Service {
         return null;
     }
 
-    private void onConfigChanged(JSONObject ignored) {
+    private void onConfigChanged(JSONObject config) {
         if (!requested) {
             Log.i(TAG, "onConfigChanged ignored(requested=false)");
             return;
