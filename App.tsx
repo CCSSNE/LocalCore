@@ -292,6 +292,7 @@ export default function App() {
   const prefillComplete = useRef(true);
   const progressStarted = useRef(false);
   const progressT0 = useRef(0);
+  const latestProgress = useRef<{phase: string; done: number; total: number; elapsedMs: number; receivedAt: number} | null>(null);
   const [chatGate, setChatGate] = useState<{loading: boolean; models: number; loaded: boolean}>({
     loading: true,
     models: 0,
@@ -777,7 +778,15 @@ export default function App() {
       if (!phase) return;
       const done = Number(event?.done ?? 0);
       const total = Number(event?.total ?? 0);
-      const elapsedMs = Number(event?.elapsedMs ?? 0);
+      latestProgress.current = {phase, done, total, elapsedMs: Number(event?.elapsedMs ?? 0), receivedAt: Date.now()};
+      progressStarted.current = true;
+    });
+    // 回调只保存计算快照，显示统一由 100ms 定时器驱动，不等待新 token。
+    const progressTimer = setInterval(() => {
+      const progress = latestProgress.current;
+      if (prefillComplete.current || !progress) return;
+      const {phase, done, total} = progress;
+      const elapsedMs = progress.elapsedMs + Date.now() - progress.receivedAt;
       const labels: Record<string, string> = {
         context_prepare: '正在准备文字',
         image_prepare: '正在读取和预处理图片',
@@ -790,14 +799,13 @@ export default function App() {
       const mspTxt = done > 0 && elapsedMs > 0 ? `${(elapsedMs / done).toFixed(2)}ms/t` : '--';
       const secTxt = progressT0.current > 0 ? `${((Date.now() - progressT0.current) / 1000).toFixed(1)}s` : '--';
       const msg = `${labels[phase] ?? phase} ${done}/${total}${pct} ${speedTxt} ${mspTxt} ${secTxt}`;
-      progressStarted.current = true;
       setProgressMsg(msg);
-      push('info', '·· ' + msg);
-    });
+    }, 100);
     return () => {
       sub.remove();
       stageSub.remove();
       progSub.remove();
+      clearInterval(progressTimer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -989,6 +997,7 @@ export default function App() {
     setProgressMsg('');
     prefillComplete.current = false;
     progressStarted.current = false;
+    latestProgress.current = null;
     progressT0.current = Date.now();
     const label = '聊天推理';
     setBusy(label);

@@ -87,7 +87,7 @@ public:
             const int stride = std::max(1, (nodes + 99) / 100);
             for (int i = stride; i < nodes; i += stride) checkpoints.emplace(compute_nodes[i - 1], i);
             checkpoints.emplace(compute_nodes.back(), nodes);
-            owner.publish(*phase, phase->completed, true);
+            owner.publish(*phase, phase->completed);
         }
     };
 
@@ -141,7 +141,7 @@ public:
         check_cancelled();
         image_chunk = is_image;
         chunk_tokens = tokens;
-        if (active) publish(is_image ? image : context, (is_image ? image : context).completed, true);
+        if (active) publish(is_image ? image : context, (is_image ? image : context).completed);
     }
 
     void finish_chunk() {
@@ -170,21 +170,19 @@ private:
     localcore_progress_callback2 callback2 = nullptr;
     void * user_data2 = nullptr;
     Phase * current = nullptr;
-    std::chrono::steady_clock::time_point last_report;
     std::chrono::steady_clock::time_point phase_since;
 
     void finish(Phase & phase) {
         if (phase.total > 0 && phase.completed == phase.total && phase.last_value != 10000) {
-            publish(phase, phase.completed, true, true);
+            publish(phase, phase.completed, true);
         }
     }
 
-    void publish(Phase & phase, double completed, bool force = false, bool finished = false) {
+    void publish(Phase & phase, double completed, bool finished = false) {
         if (!active || phase.total == 0) return;
         const int32_t value = finished ? 10000 : std::min(9999, static_cast<int>(std::floor(completed / phase.total * 10000)));
         const auto now = std::chrono::steady_clock::now();
         const bool switched = current != &phase;
-        if (!switched && !force && (value == phase.last_value || now - last_report < std::chrono::milliseconds(100))) return;
         if (switched && current != nullptr) {
             current->elapsed_ms += std::chrono::duration_cast<std::chrono::milliseconds>(now - phase_since).count();
         }
@@ -193,7 +191,6 @@ private:
             phase_since = now;
         }
         phase.last_value = value;
-        last_report = now;
         if (callback != nullptr) callback(phase.name, value, 10000, user_data);
         if (callback2 != nullptr) {
             const int64_t elapsed = phase.elapsed_ms
