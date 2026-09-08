@@ -75,6 +75,7 @@ public final class BackendService extends Service {
     }
 
     private void startInBackground(String action, int startId) {
+        if (!requested) return;
         long t0 = SystemClock.uptimeMillis();
         Log.i(TAG, "startInBackground begin action=" + action + " startId=" + startId);
         try {
@@ -150,7 +151,7 @@ public final class BackendService extends Service {
         } catch (Exception error) {
             Log.e(TAG, "stopInBackground failed", error);
         } finally {
-            stopForeground(STOP_FOREGROUND_REMOVE);
+            if (!requested) stopForeground(STOP_FOREGROUND_REMOVE);
             stopSelfResult(stopId);
             Log.i(TAG, "stopInBackground end elapsedMs=" + (SystemClock.uptimeMillis() - t0));
         }
@@ -158,6 +159,7 @@ public final class BackendService extends Service {
 
     @Override
     public void onDestroy() {
+        requested = false;
         long t0 = SystemClock.uptimeMillis();
         Log.i(TAG, "onDestroy begin");
         try {

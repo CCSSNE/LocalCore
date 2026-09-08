@@ -86,6 +86,7 @@ public final class RuntimeManager {
     private JSONObject loadedParameters;
     private JSONObject loadedColdConfig;
     private String loadedConfigIdentity;
+    private Thread activeInferenceThread;
 
     public RuntimeManager(Context context, ConfigRepository config, ResourceManager resources, EventLog events) {
         this.context = context;
@@ -263,8 +264,15 @@ public final class RuntimeManager {
         }
     }
 
-    public void cancel() {
-        nativeRuntime.cancel();
+    public synchronized void cancel() {
+        if (activeInferenceThread != null) nativeRuntime.cancel();
+    }
+
+    public synchronized void cancel(Thread owner) {
+        if (activeInferenceThread == owner) {
+            events.info("runtime", "取消所属 HTTP 请求 thread=" + owner.getName());
+            nativeRuntime.cancel();
+        }
     }
 
     public void addListener(Listener listener) {
@@ -281,10 +289,17 @@ public final class RuntimeManager {
         String requestId = body.optString("_requestId", "local");
         String requestedModel = body.optString("model");
         events.info("runtime", requestId + " 排队 kind=" + kind + " requestedModel=" + requestedModel);
-        inference.lock();
+        try {
+            inference.lockInterruptibly();
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            events.info("runtime", requestId + " 排队已取消");
+            throw new java.util.concurrent.CancellationException("请求在排队时已取消");
+        }
         final long startedAt = System.currentTimeMillis();
         final long[] firstTokenAt = {0};
         final TokenConsumer timed = token -> {
+            checkRequestInterrupted();
             if (firstTokenAt[0] == 0) {
                 firstTokenAt[0] = System.currentTimeMillis();
                 stage(stages, "首字到达");
@@ -298,9 +313,10 @@ public final class RuntimeManager {
                 throw new IllegalStateException("核心增量事件不是有效 JSON", error);
             }
         };
-        final NativeRuntime.Progress2Consumer forwarding2 = progress2 == null ? null :
-                (phase, doneTokens, totalTokens, elapsedMs) ->
-                        progress2.onProgress(phase, doneTokens, totalTokens, elapsedMs);
+        final NativeRuntime.Progress2Consumer forwarding2 = (phase, doneTokens, totalTokens, elapsedMs) -> {
+            checkRequestInterrupted();
+            if (progress2 != null) progress2.onProgress(phase, doneTokens, totalTokens, elapsedMs);
+        };
         try {
             events.info("runtime", requestId + " 获得调度锁 queueMs="
                     + (startedAt - queuedAt) + " requestedModel=" + requestedModel + " loadedModel=" + loadedModelId);
@@ -331,7 +347,17 @@ public final class RuntimeManager {
                     .put("loadRequest", loadedParameters)
                     .put("hot", hotParameters);
             stage(stages, "核心推理开始");
-            JSONObject response = new JSONObject(nativeRuntime.infer4(body.toString(), timed, forwarding2));
+            synchronized (this) {
+                checkRequestInterrupted();
+                activeInferenceThread = Thread.currentThread();
+            }
+            JSONObject response;
+            try {
+                response = new JSONObject(nativeRuntime.infer4(body.toString(), timed, forwarding2));
+                checkRequestInterrupted();
+            } finally {
+                synchronized (this) { activeInferenceThread = null; }
+            }
             stage(stages, "核心推理结束");
             setState(new RuntimeState(RuntimeState.Phase.MODEL_READY,
                     before.coreId, before.coreVersion, loadedModelId, null));
@@ -368,6 +394,12 @@ public final class RuntimeManager {
 
     private static void stage(StageListener stages, String text) {
         if (stages != null) stages.onStage(text);
+    }
+
+    private static void checkRequestInterrupted() {
+        if (Thread.currentThread().isInterrupted()) {
+            throw new java.util.concurrent.CancellationException("所属请求已停止");
+        }
     }
 
     private volatile JSONObject hotDefaults = new JSONObject();

@@ -146,15 +146,17 @@ struct ProgressState2 {
     JNIEnv * env;
     jobject callback;
     jmethodID method;
+    Core * core = nullptr;
 };
 
 void emit_progress2(const char * phase, int32_t done, int32_t total, int64_t elapsed_ms, void * opaque) {
     auto * state = static_cast<ProgressState2 *>(opaque);
-    if (state == nullptr || state->callback == nullptr) return;
+    if (state == nullptr || state->callback == nullptr || state->env->ExceptionCheck()) return;
     jstring name = java_string(state->env, phase, strlen(phase));
     if (name == nullptr) return;
     state->env->CallVoidMethod(state->callback, state->method, name, done, total, elapsed_ms);
     state->env->DeleteLocalRef(name);
+    if (state->env->ExceptionCheck() && state->core != nullptr) state->core->cancel(state->core->instance);
 }
 
 std::string take(Core * core, char * value) {
@@ -334,7 +336,7 @@ Java_com_localcore_runtime_NativeRuntime_nativeInfer3(
             env->DeleteLocalRef(type);
             if (token_state.method == nullptr) throw std::runtime_error("TokenConsumer.onToken 方法不存在");
         }
-        ProgressState2 progress_state{env, progress_callback, nullptr};
+        ProgressState2 progress_state{env, progress_callback, nullptr, core};
         if (progress_callback != nullptr) {
             jclass type = env->GetObjectClass(progress_callback);
             progress_state.method = env->GetMethodID(type, "onProgress", "(Ljava/lang/String;IIJ)V");
@@ -381,7 +383,7 @@ Java_com_localcore_runtime_NativeRuntime_nativeInfer4(
             env->DeleteLocalRef(type);
             if (token_state.method == nullptr) throw std::runtime_error("TokenConsumer.onToken 方法不存在");
         }
-        ProgressState2 progress_state{env, progress_callback, nullptr};
+        ProgressState2 progress_state{env, progress_callback, nullptr, core};
         if (progress_callback != nullptr) {
             jclass type = env->GetObjectClass(progress_callback);
             progress_state.method = env->GetMethodID(type, "onProgress", "(Ljava/lang/String;IIJ)V");

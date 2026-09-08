@@ -30,7 +30,8 @@ public final class LocalHttpServer {
     private final ResourceManager resources;
     private final RuntimeManager runtime;
     private final EventLog events;
-    private final ExecutorService connections = Executors.newCachedThreadPool();
+    private ExecutorService connections;
+    private final java.util.Map<Socket, Thread> clients = new java.util.HashMap<>();
     private ServerSocket socket;
     private Thread acceptThread;
     private String address;
@@ -64,13 +65,20 @@ public final class LocalHttpServer {
         ServerSocket candidate = new ServerSocket();
         candidate.setReuseAddress(true);
         long bind0 = System.currentTimeMillis();
-        candidate.bind(new InetSocketAddress(resolved, port));
+        try {
+            candidate.bind(new InetSocketAddress(resolved, port));
+        } catch (IOException | RuntimeException error) {
+            try { candidate.close(); } catch (IOException closeError) { error.addSuppressed(closeError); }
+            throw error;
+        }
         long bindMs = System.currentTimeMillis() - bind0;
         socket = candidate;
         boundHost = host;
         boundPort = port;
         address = "http://" + host + ":" + port;
-        acceptThread = new Thread(this::acceptLoop, "localcore-http-accept");
+        ExecutorService workers = Executors.newCachedThreadPool();
+        connections = workers;
+        acceptThread = new Thread(() -> acceptLoop(candidate, workers), "localcore-http-accept");
         acceptThread.start();
         events.info("server", "HTTP 服务已监听 " + address
                 + " totalElapsedMs=" + (System.currentTimeMillis() - t0) + " bindMs=" + bindMs);
@@ -82,6 +90,21 @@ public final class LocalHttpServer {
         ServerSocket active = socket;
         socket = null;
         address = null;
+        events.info("server", "Stopping owned HTTP requests count=" + clients.size());
+        for (java.util.Map.Entry<Socket, Thread> client : clients.entrySet()) {
+            Thread worker = client.getValue();
+            if (worker != null) {
+                worker.interrupt();
+                runtime.cancel(worker);
+            }
+            try { client.getKey().close(); }
+            catch (IOException error) { events.error("server", "Client close failed", error); }
+        }
+        clients.clear();
+        if (connections != null) {
+            connections.shutdownNow();
+            connections = null;
+        }
         if (active != null) {
             try {
                 active.close();
@@ -107,21 +130,35 @@ public final class LocalHttpServer {
                 && server.optInt("port") == boundPort;
     }
 
-    private void acceptLoop() {
-        while (true) {
-            ServerSocket active;
-            synchronized (this) { active = socket; }
-            if (active == null) return;
-            try {
-                Socket connection = active.accept();
-                connections.execute(() -> serve(connection));
-            } catch (SocketException error) {
+    private void acceptLoop(ServerSocket listener, ExecutorService workers) {
+        try {
+            while (!listener.isClosed()) {
+                Socket connection = listener.accept();
                 synchronized (this) {
-                    if (socket == null) return;
+                    if (socket != listener) { connection.close(); return; }
+                    clients.put(connection, null);
+                    workers.execute(() -> {
+                        synchronized (this) {
+                            if (socket != listener || connection.isClosed()) {
+                                clients.remove(connection);
+                                return;
+                            }
+                            clients.put(connection, Thread.currentThread());
+                        }
+                        try { serve(connection); }
+                        finally {
+                            synchronized (this) { clients.remove(connection); }
+                            events.info("server", "HTTP request worker released peer=" + connection.getRemoteSocketAddress());
+                        }
+                    });
                 }
-                events.error("server", "HTTP accept 失败", error);
-            } catch (IOException error) {
-                events.error("server", "HTTP accept 失败", error);
+            }
+        } catch (IOException error) {
+            synchronized (this) {
+                if (socket == listener) {
+                    events.error("server", "HTTP accept failed; stopping this listener", error);
+                    stop();
+                }
             }
         }
     }
