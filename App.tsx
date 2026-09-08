@@ -52,7 +52,8 @@ const TITLES: Record<RouteKey, string> = {
 
 type LogLine = {kind: 'info' | 'ok' | 'fail'; text: string};
 type ChatMsg = {role: 'user' | 'ai' | 'error'; text: string; imageUris?: string[]; imageUri?: string | null; live?: boolean; stats?: TurnStats};
-type TurnStats = {inT: number; out: number; ttft: number; llm: number};
+type GenerationInfo = {modelId: string; modelName: string; cold: Record<string, any>; loadRequest: Record<string, any>; hot: Record<string, any>};
+type TurnStats = {inT: number; out: number; ttft: number; llm: number; generation?: GenerationInfo};
 
 function msgImageUris(m: ChatMsg): string[] {
   if (Array.isArray(m.imageUris)) return m.imageUris.filter(u => typeof u === 'string' && u.length > 0);
@@ -98,7 +99,13 @@ function StatsStrip({stats}: {stats: TurnStats}) {
   const body =
     `in-${fmtCount(stats.inT)} ${fmtSpeed(stats.inT, stats.ttft)} ${fmtMsPerTok(stats.ttft, stats.inT)} ${fmtDur(stats.ttft)}` +
     `\nout-${fmtCount(stats.out)} ${fmtSpeed(stats.out, stats.llm)} ${fmtMsPerTok(stats.llm, stats.out)} ${fmtDur(stats.llm)}` +
-    `\ntotal-${fmtCount(stats.inT + stats.out)}`;
+    `\ntotal-${fmtCount(stats.inT + stats.out)}` +
+    (stats.generation
+      ? `\n模型：${stats.generation.modelName || '未配置名称'}\n模型 ID：${stats.generation.modelId}` +
+        `\n冷参数配置（含自定义）：\n${JSON.stringify(stats.generation.cold, null, 2)}` +
+        `\n实际加载参数：\n${JSON.stringify(stats.generation.loadRequest, null, 2)}` +
+        `\n热参数（含自定义）：\n${JSON.stringify(stats.generation.hot, null, 2)}`
+      : '\n此历史记录未保存模型和参数信息');
   return (
     <TouchableOpacity onPress={() => setOpen(v => !v)} style={styles.statsBox}>
       <Text style={styles.statsText}>
@@ -731,6 +738,7 @@ export default function App() {
               out: Number(item.stats.out ?? 0),
               ttft: Number(item.stats.ttft ?? 0),
               llm: Number(item.stats.llm ?? 0),
+              generation: item.stats.generation,
             };
           }
           if (msg.role === 'ai' && msg.text === '' && !msg.stats) continue;
@@ -1014,6 +1022,7 @@ export default function App() {
           out: Number(result?.completionTokens ?? 0),
           ttft: Number(result?.ttftMs ?? 0),
           llm: Number(result?.llmMs ?? 0),
+          generation: result.generation,
         };
         setMessages(prev => {
           if (prev.length === 0) return [...prev, {role: 'ai', text, stats}];

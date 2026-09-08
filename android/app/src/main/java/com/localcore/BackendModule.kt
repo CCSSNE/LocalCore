@@ -323,6 +323,7 @@ class BackendModule(private val reactContext: ReactApplicationContext) :
         .put("completionTokens", result.completionTokens)
         .put("ttftMs", result.ttftMs)
         .put("llmMs", result.llmMs)
+        .put("generation", result.generation)
         .toString()
   }
 

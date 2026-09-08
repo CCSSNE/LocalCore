@@ -51,9 +51,10 @@ public final class RuntimeManager {
         public final boolean structured;
         public final long ttftMs;
         public final long llmMs;
+        public final JSONObject generation;
 
         public Result(int promptTokens, int completionTokens, String text, JSONObject message, boolean structured,
-                      long ttftMs, long llmMs) {
+                      long ttftMs, long llmMs, JSONObject generation) {
             this.promptTokens = promptTokens;
             this.completionTokens = completionTokens;
             this.text = text;
@@ -61,6 +62,7 @@ public final class RuntimeManager {
             this.structured = structured;
             this.ttftMs = ttftMs;
             this.llmMs = llmMs;
+            this.generation = generation;
         }
     }
 
@@ -75,6 +77,9 @@ public final class RuntimeManager {
     private final List<Listener> listeners = new CopyOnWriteArrayList<>();
     private RuntimeState state = RuntimeState.empty();
     private String loadedModelId;
+    private String loadedModelName;
+    private JSONObject loadedParameters;
+    private JSONObject loadedColdConfig;
 
     public RuntimeManager(Context context, ConfigRepository config, ResourceManager resources, EventLog events) {
         this.context = context;
@@ -137,6 +142,11 @@ public final class RuntimeManager {
             }
             JSONObject response = new JSONObject(nativeRuntime.loadModel(request.toString()));
             loadedModelId = modelId;
+            loadedModelName = model.optString("name");
+            loadedColdConfig = new JSONObject(load.toString());
+            loadedParameters = new JSONObject(request.toString());
+            loadedParameters.remove("modelPath");
+            loadedParameters.remove("mmprojPath");
             String version = response.getString("version");
             setState(new RuntimeState(RuntimeState.Phase.MODEL_READY, coreId, version, modelId, null));
             events.info("runtime", "模型已加载 " + modelId + "，核心 " + version
@@ -250,6 +260,16 @@ public final class RuntimeManager {
                     before.coreId, before.coreVersion, loadedModelId, null));
             body.put("type", kind);
             applyModelDefaults(body);
+            JSONObject hotParameters = new JSONObject(body.toString());
+            for (String key : new String[]{"type", "messages", "prompt", "mediaPaths"}) {
+                hotParameters.remove(key);
+            }
+            JSONObject generation = new JSONObject()
+                    .put("modelId", loadedModelId)
+                    .put("modelName", loadedModelName)
+                    .put("cold", loadedColdConfig)
+                    .put("loadRequest", loadedParameters)
+                    .put("hot", hotParameters);
             stage(stages, "核心推理开始");
             JSONObject response = new JSONObject(nativeRuntime.infer3(body.toString(), timed, forwarding2));
             stage(stages, "核心推理结束");
@@ -265,7 +285,7 @@ public final class RuntimeManager {
                     + " 请求=" + body + " 输出=" + response.optString("text"));
             return new Result(response.getInt("promptTokens"), response.getInt("completionTokens"),
                     response.getString("text"), response.optJSONObject("message"),
-                    response.optBoolean("structured"), ttft, elapsed);
+                    response.optBoolean("structured"), ttft, elapsed, generation);
         } catch (Exception error) {
             RuntimeState before = state();
             setState(new RuntimeState(RuntimeState.Phase.ERROR, before.coreId, before.coreVersion,
