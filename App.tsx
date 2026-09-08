@@ -1336,13 +1336,6 @@ export default function App() {
                 <Text style={styles.retryText}>↻</Text>
               </TouchableOpacity>
               <View style={styles.userContent}>
-                {m.text !== '' ? (
-                  <View style={[styles.bubble, styles.bubbleUser, styles.bubbleUserInRow, uris.length === 0 && styles.bubbleUserLast]}>
-                    <Text style={styles.bubbleUserText} selectable>
-                      {m.text}
-                    </Text>
-                  </View>
-                ) : null}
                 {uris.length > 0 ? (
                   <View style={[styles.sentStrip, styles.sentStripInRow]}>
                     {uris.map((uri, idx) => (
@@ -1350,6 +1343,13 @@ export default function App() {
                         <Image source={{uri}} style={styles.thumbSmall} resizeMode="cover" />
                       </TouchableOpacity>
                     ))}
+                  </View>
+                ) : null}
+                {m.text !== '' ? (
+                  <View style={[styles.bubble, styles.bubbleUser, styles.bubbleUserInRow, styles.bubbleUserLast]}>
+                    <Text style={styles.bubbleUserText} selectable>
+                      {m.text}
+                    </Text>
                   </View>
                 ) : null}
               </View>
