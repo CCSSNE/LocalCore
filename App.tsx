@@ -1856,6 +1856,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 10,
     minHeight: 160,
+    marginBottom: 12,
     color: '#111111',
     textAlignVertical: 'top',
     includeFontPadding: false,
