@@ -1636,7 +1636,7 @@ export default function App() {
           <Pressable
             style={[styles.rightDrawer, {paddingTop: (StatusBar.currentHeight ?? 24) + 8}]} // 主界面edge-to-edge从屏幕顶算, H+8与左抽屉顶部对齐
             onPress={e => e.stopPropagation()}>
-            <Text style={styles.drawerTitle}>推理设置</Text>
+            <Text style={[styles.drawerTitle, {textAlign: 'center', marginLeft: 0}]}>推理设置</Text>
             <TouchableOpacity style={[styles.btn, styles.clearBtn]} onPress={clearChat}>
               <Text>清空聊天记录</Text>
             </TouchableOpacity>
