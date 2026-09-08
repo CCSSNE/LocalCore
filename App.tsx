@@ -945,6 +945,7 @@ export default function App() {
   };
 
   const clearChat = () => {
+    go('chat');
     const uris: string[] = [];
     for (const m of messages) {
       for (const u of msgImageUris(m)) uris.push(u);
