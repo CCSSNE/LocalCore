@@ -1353,8 +1353,9 @@ export default function App() {
               <Text>导出</Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={[styles.btn, styles.btnLast]}
+              style={styles.modelGearBtn}
               disabled={!!busy}
+              hitSlop={8}
               onPress={() => openModelSettings(model)}>
               <Text>⚙</Text>
             </TouchableOpacity>
@@ -1780,6 +1781,12 @@ const styles = StyleSheet.create({
   btnFlex: {flex: 1, alignItems: 'center'},
   btnLast: {marginRight: 0},
   btnDisabled: {opacity: 0.45},
+  modelGearBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   card: {
     padding: 12,
     marginBottom: 10,
