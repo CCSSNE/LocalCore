@@ -952,7 +952,6 @@ export default function App() {
     for (const u of pendingImages) uris.push(u);
     setMessages([]);
     setPendingImages([]);
-    setChatMenuOpen(false);
     (async () => {
       for (const uri of uris) {
         try {
