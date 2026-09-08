@@ -270,6 +270,10 @@ public final class RuntimeManager {
 
     private Result runInference(String kind, JSONObject body, TokenConsumer consumer, StageListener stages,
                                 ProgressListener progress, Progress2Listener progress2) {
+        long queuedAt = System.currentTimeMillis();
+        String requestId = body.optString("_requestId", "local");
+        String requestedModel = body.optString("model");
+        events.info("runtime", requestId + " 排队 kind=" + kind + " requestedModel=" + requestedModel);
         inference.lock();
         final long startedAt = System.currentTimeMillis();
         final long[] firstTokenAt = {0};
@@ -284,7 +288,14 @@ public final class RuntimeManager {
                 (phase, doneTokens, totalTokens, elapsedMs) ->
                         progress2.onProgress(phase, doneTokens, totalTokens, elapsedMs);
         try {
+            events.info("runtime", requestId + " 获得调度锁 queueMs="
+                    + (startedAt - queuedAt) + " requestedModel=" + requestedModel + " loadedModel=" + loadedModelId);
+            if (!requestedModel.isEmpty() && (!requestedModel.equals(loadedModelId)
+                    || state().phase == RuntimeState.Phase.ERROR)) {
+                loadModel(requestedModel);
+            }
             if (loadedModelId == null) throw new IllegalStateException("尚未加载模型");
+            events.info("runtime", requestId + " 执行模型=" + loadedModelId);
             RuntimeState before = state();
             setState(new RuntimeState(RuntimeState.Phase.GENERATING,
                     before.coreId, before.coreVersion, loadedModelId, null));

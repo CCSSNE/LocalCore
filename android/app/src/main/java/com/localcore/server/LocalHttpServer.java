@@ -182,7 +182,7 @@ public final class LocalHttpServer {
         String modelId = requiredString(request, "model");
         JSONArray messages = request.optJSONArray("messages");
         if (messages == null) throw new HttpProblem(400, "invalid_request", "messages 必须是数组");
-        ensureModel(modelId);
+        put(request, "_requestId", requestId);
         boolean stream = request.optBoolean("stream", false);
         // 语义日志：模型 + 流式与否 + 全量 OpenAI 请求体，前端对照时只看这一行就知道输入了什么。
         events.info("request", requestId + " chat model=" + modelId + " stream=" + stream
@@ -216,7 +216,7 @@ public final class LocalHttpServer {
     private void completion(JSONObject request, HttpOutput output, String requestId, long startedAt) throws IOException {
         String modelId = requiredString(request, "model");
         String prompt = requiredString(request, "prompt");
-        ensureModel(modelId);
+        put(request, "_requestId", requestId);
         boolean stream = request.optBoolean("stream", false);
         events.info("request", requestId + " completion model=" + modelId + " stream=" + stream
                 + " prompt=" + prompt + " body=" + request);
@@ -251,19 +251,6 @@ public final class LocalHttpServer {
                     + (System.currentTimeMillis() - startedAt) + " completion model=" + modelId + " stream=false"
                     + " promptTokens=" + result.promptTokens + " completionTokens=" + result.completionTokens
                     + " ttftMs=" + result.ttftMs + " llmMs=" + result.llmMs + " body=" + body);
-        }
-    }
-
-    private void ensureModel(String id) {
-        RuntimeState state = runtime.state();
-        if (id.equals(state.modelId) && (state.phase == RuntimeState.Phase.MODEL_READY
-                || state.phase == RuntimeState.Phase.GENERATING)) return;
-        try {
-            runtime.loadModel(id);
-        } catch (IllegalStateException error) {
-            throw new HttpProblem(409, "model_unavailable", error.getMessage());
-        } catch (IllegalArgumentException error) {
-            throw new HttpProblem(400, "invalid_model", error.getMessage());
         }
     }
 
