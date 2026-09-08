@@ -1,13 +1,16 @@
 package com.localcore.app;
 
 import android.content.Context;
+import android.content.Intent;
 import android.database.Cursor;
 import android.net.Uri;
+import android.os.ParcelFileDescriptor;
 import android.provider.OpenableColumns;
 
 import com.localcore.config.ConfigRepository;
 import com.localcore.config.HotSettings;
 import com.localcore.diagnostics.EventLog;
+import com.localcore.io.ExternalFile;
 import com.localcore.io.GgufMeta;
 import com.localcore.resource.ResourceManager;
 import com.localcore.resource.ResourceState;
@@ -78,6 +81,40 @@ public final class LocalExchange {
         outcome.put("modelId", modelId);
         outcome.put("contextSize", contextSize);
         outcome.put("contextFallback", false);
+        return outcome.toString();
+    }
+
+    public String importExternalModel(Uri uri) throws Exception {
+        try {
+            context.getContentResolver().takePersistableUriPermission(uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        } catch (SecurityException error) {
+            throw new IllegalStateException("该位置不支持持久授权，拒绝外部引用", error);
+        }
+        String name = displayName(uri);
+        long size;
+        try (ParcelFileDescriptor handle = ExternalFile.openRegularFile(context.getContentResolver(), uri)) {
+            size = handle.getStatSize();
+        }
+        String base = stripSuffix(name, ".gguf");
+        String resourceId = uniqueResourceId("ext." + sanitize(base));
+        String modelId = uniqueModelId("ext." + sanitize(base));
+        JSONObject descriptor = descriptor(resourceId, "model");
+        descriptor.put("origin", "external");
+        descriptor.put("externalUri", uri.toString());
+        descriptor.put("fileName", name);
+        descriptor.put("size", Math.max(0, size));
+        JSONObject next = config.current();
+        upsertResource(next, descriptor);
+        long contextSize = 200000;
+        next.getJSONArray("models").put(modelEntry(base, modelId, resourceId, currentCoreId(), contextSize));
+        config.activate(next.toString());
+        events.info("resource", "外部模型已引用 " + modelId + " <- " + uri);
+        JSONObject outcome = new JSONObject();
+        outcome.put("modelId", modelId);
+        outcome.put("contextSize", contextSize);
+        outcome.put("contextFallback", false);
+        outcome.put("external", true);
         return outcome.toString();
     }
 
@@ -281,6 +318,9 @@ public final class LocalExchange {
             throw new IllegalArgumentException("未知模型导出角色: " + role);
         }
         JSONObject descriptor = resourceById(current, resourceId);
+        if (!descriptor.optString("externalUri").isEmpty()) {
+            throw new IllegalArgumentException("外部引用模型无需导出，源文件即在外部: " + model.optString("id"));
+        }
         String fallbackLeaf = leafName(fallbackName);
         if (fallbackLeaf.isEmpty()) fallbackLeaf = role + ".gguf";
         String displayName = leafName(descriptor.optString("fileName", fallbackLeaf));
@@ -289,7 +329,20 @@ public final class LocalExchange {
     }
 
     public String readTemplate(String modelId) throws Exception {
-        JSONObject model = modelById(config.current(), modelId);
+        JSONObject current = config.current();
+        JSONObject model = modelById(current, modelId);
+        JSONObject descriptor = resourceById(current, model.optString("resource"));
+        String externalUri = descriptor.optString("externalUri");
+        if (!externalUri.isEmpty()) {
+            Uri uri = Uri.parse(externalUri);
+            try (InputStream input = open(uri)) {
+                return GgufMeta.chatTemplate(input, displayName(uri));
+            } catch (java.io.FileNotFoundException error) {
+                throw new IllegalStateException("外部模型源文件不存在，可能已被删除或移动，请重新引用");
+            } catch (SecurityException error) {
+                throw new IllegalStateException("外部模型授权已丢失，请删除后重新引用");
+            }
+        }
         File file = resources.installedFile(model.optString("resource"));
         return GgufMeta.chatTemplate(file);
     }

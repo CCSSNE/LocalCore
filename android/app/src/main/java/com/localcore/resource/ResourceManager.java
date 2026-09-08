@@ -155,6 +155,7 @@ public final class ResourceManager {
         JSONArray resources = config.current().optJSONArray("resources");
         for (int i = 0; i < resources.length(); i++) {
             JSONObject descriptor = resources.optJSONObject(i);
+            if (!descriptor.optString("externalUri").isEmpty()) continue;
             ResourceState current = state(descriptor.optString("id"));
             if (!current.usable() || !descriptor.optString("version").equals(current.version)) {
                 install(descriptor.optString("id"));
@@ -567,6 +568,15 @@ public final class ResourceManager {
     }
 
     private ResourceState present(JSONObject descriptor, ResourceState state) {
+        // 外部引用没有内置文件：合成常驻 INSTALLED，不进持久化 states，
+        // reconcile 只扫 states map 所以不会自删；可用性每次加载时现验。
+        if (!descriptor.optString("externalUri").isEmpty()) {
+            long size = effective(descriptor).optLong("size");
+            String version = descriptor.optString("version");
+            return new ResourceState(descriptor.optString("id"), descriptor.optString("type"),
+                    version, version, ResourceState.Status.INSTALLED, size, size,
+                    descriptor.optString("externalUri"), null);
+        }
         if (state == null) return missing(descriptor);
         String wanted = descriptor.optString("version");
         if (state.usable() && !wanted.equals(state.version)

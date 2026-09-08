@@ -1,10 +1,13 @@
 package com.localcore.runtime;
 
 import android.content.Context;
+import android.net.Uri;
+import android.os.ParcelFileDescriptor;
 
 import com.localcore.config.ConfigRepository;
 import com.localcore.config.HotSettings;
 import com.localcore.diagnostics.EventLog;
+import com.localcore.io.ExternalFile;
 import com.localcore.resource.ResourceManager;
 
 import org.json.JSONArray;
@@ -65,6 +68,8 @@ public final class RuntimeManager {
     private final ConfigRepository config;
     private final ResourceManager resources;
     private final EventLog events;
+    private final Context context;
+    private final java.util.Map<String, ParcelFileDescriptor> externalHandles = new java.util.HashMap<>();
     private final MediaResolver media;
     private final NativeRuntime nativeRuntime = new NativeRuntime();
     private final ReentrantLock inference = new ReentrantLock(true);
@@ -73,6 +78,7 @@ public final class RuntimeManager {
     private String loadedModelId;
 
     public RuntimeManager(Context context, ConfigRepository config, ResourceManager resources, EventLog events) {
+        this.context = context;
         this.config = config;
         this.resources = resources;
         this.events = events;
@@ -89,18 +95,34 @@ public final class RuntimeManager {
 
     public void loadModel(String modelId) {
         inference.lock();
+        String openedExternal = null;
         try {
+            closeExternalHandles();
             JSONObject model = findModel(modelId);
             String coreId = model.getString("core");
             File coreFile = resources.installedFile(coreId);
-            File modelFile = resources.installedFile(model.getString("resource"));
+            String resourceId = model.getString("resource");
+            JSONObject resourceDescriptor = findResource(resourceId);
+            String externalUri = resourceDescriptor.optString("externalUri");
+            String modelPath;
+            if (externalUri.isEmpty()) {
+                modelPath = resources.installedFile(resourceId).getAbsolutePath();
+            } else {
+                ParcelFileDescriptor handle = ExternalFile.openRegularFile(
+                        context.getContentResolver(), Uri.parse(externalUri));
+                synchronized (externalHandles) {
+                    externalHandles.put(resourceId, handle);
+                }
+                openedExternal = resourceId;
+                modelPath = ExternalFile.fdPath(handle);
+            }
             JSONObject coreDescriptor = findResource(coreId);
             JSONObject load = model.getJSONObject("load");
             setState(new RuntimeState(RuntimeState.Phase.MODEL_LOADING, coreId,
                     coreDescriptor.optString("version"), modelId, null));
             nativeRuntime.openCore(coreFile.getAbsolutePath());
             JSONObject request = new JSONObject();
-            request.put("modelPath", modelFile.getAbsolutePath());
+            request.put("modelPath", modelPath);
             String mmprojId = model.optString("mmproj");
             if (!mmprojId.isEmpty()) request.put("mmprojPath", resources.installedFile(mmprojId).getAbsolutePath());
             request.put("contextSize", load.getInt("contextSize"));
@@ -121,6 +143,7 @@ public final class RuntimeManager {
             events.info("runtime", "模型已加载 " + modelId + "，核心 " + version
                     + "，vision=" + response.optBoolean("vision"));
         } catch (Exception error) {
+            if (openedExternal != null) closeExternalHandle(openedExternal);
             loadedModelId = null;
             setState(new RuntimeState(RuntimeState.Phase.ERROR, null, null, modelId, error.getMessage()));
             events.error("runtime", "模型加载失败 " + modelId, error);
@@ -134,6 +157,7 @@ public final class RuntimeManager {
         inference.lock();
         try {
             nativeRuntime.unloadModel();
+            closeExternalHandles();
             loadedModelId = null;
             setState(RuntimeState.empty());
             events.info("runtime", "模型已卸载");
@@ -299,8 +323,30 @@ public final class RuntimeManager {
         throw new IllegalArgumentException("配置中不存在资源: " + id);
     }
 
+    private void closeExternalHandles() {
+        synchronized (externalHandles) {
+            for (ParcelFileDescriptor handle : externalHandles.values()) {
+                try {
+                    handle.close();
+                } catch (IOException ignored) {
+                }
+            }
+            externalHandles.clear();
+        }
+    }
+
+    private void closeExternalHandle(String resourceId) {
+        synchronized (externalHandles) {
+            ParcelFileDescriptor handle = externalHandles.remove(resourceId);
+            if (handle == null) return;
+            try {
+                handle.close();
+            } catch (IOException ignored) {
+            }
+        }
+    }
+
     private void setState(RuntimeState next) {
-        synchronized (this) {
             state = next;
         }
         for (Listener listener : listeners) listener.onRuntimeState(next);

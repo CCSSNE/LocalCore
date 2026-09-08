@@ -142,6 +142,13 @@ class BackendModule(private val reactContext: ReactApplicationContext) :
   }
 
   @ReactMethod
+  fun importModelExternal(uriString: String, promise: Promise) {
+    runAsync(promise, "IMPORT_EXTERNAL_FAILED") {
+      application.graph.exchange.importExternalModel(Uri.parse(uriString))
+    }
+  }
+
+  @ReactMethod
   fun loadModel(modelId: String, promise: Promise) {
     runAsync(promise, "LOAD_FAILED") {
       application.graph.runtime.loadModel(modelId)

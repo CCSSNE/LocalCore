@@ -6,6 +6,7 @@ import java.io.EOFException;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 
 public final class GgufMeta {
@@ -20,10 +21,22 @@ public final class GgufMeta {
 
     public static String chatTemplate(File file) throws IOException {
         try (DataInputStream input = new DataInputStream(new BufferedInputStream(new FileInputStream(file), 1 << 16))) {
+            return parseChatTemplate(input, file.getName());
+        }
+    }
+
+    public static String chatTemplate(InputStream stream, String name) throws IOException {
+        DataInputStream input = stream instanceof DataInputStream ? (DataInputStream) stream
+                : new DataInputStream(stream instanceof BufferedInputStream ? stream
+                        : new BufferedInputStream(stream, 1 << 16));
+        return parseChatTemplate(input, name);
+    }
+
+    private static String parseChatTemplate(DataInputStream input, String name) throws IOException {
             byte[] magic = new byte[4];
             input.readFully(magic);
             if (magic[0] != 'G' || magic[1] != 'G' || magic[2] != 'U' || magic[3] != 'F') {
-                throw new IOException("不是 GGUF 文件: " + file.getName());
+                throw new IOException("不是 GGUF 文件: " + name);
             }
             readU32(input);
             readU64(input);
@@ -46,7 +59,6 @@ public final class GgufMeta {
                 skipValue(input, type);
             }
             return null;
-        }
     }
 
     // 先找 {arch}.context_length（现代规范），再找 llama.context_length（老规范）。

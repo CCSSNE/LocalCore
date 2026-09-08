@@ -109,6 +109,7 @@ type ModelEntry = {
   name: string;
   paired: boolean;
   exportable: boolean;
+  external: boolean;
   ready: boolean;
   resourceStatus: string;
   resourceError: string | null;
@@ -141,8 +142,13 @@ function parseModels(root: any): ModelEntry[] {
   if (Array.isArray(root?.resourceStates)) {
     root.resourceStates.forEach((state: any) => resourceStates.set(String(state?.id ?? ''), state));
   }
+  const descriptorOrigins = new Map<string, string>();
+  if (Array.isArray(root?.config?.resources)) {
+    root.config.resources.forEach((d: any) => descriptorOrigins.set(String(d?.id ?? ''), String(d?.origin ?? '')));
+  }
   return arr.map((m: any) => {
     const resource = resourceStates.get(String(m?.resource ?? ''));
+    const external = descriptorOrigins.get(String(m?.resource ?? '')) === 'external';
     const source = m?.source ?? {};
     const registrationError = source?.registrationError == null
       ? null
@@ -154,7 +160,8 @@ function parseModels(root: any): ModelEntry[] {
       paired:
         !!(m?.mmproj && String(m.mmproj).length > 0) ||
         (Array.isArray(m?.capabilities) && m.capabilities.includes('vision')),
-      exportable: !!resource?.path,
+      exportable: !!resource?.path && !external,
+      external,
       ready: !!resource?.path && !contextPending && !registrationError,
       resourceStatus: String(resource?.status ?? 'MISSING'),
       resourceError: resource?.error == null ? null : String(resource.error),
@@ -715,6 +722,11 @@ export default function App() {
       fetchModels();
     });
 
+  const importExternalModel = () =>
+    run('引用外部模型', pickAnd('引用外部模型', uri => Backend.importModelExternal(uri)), () => {
+      fetchModels();
+    });
+
   const importCore = () =>
     run('导入核心', pickAnd('导入核心', uri => Backend.importCore(uri)), () => {
       fetchCore();
@@ -1044,7 +1056,9 @@ export default function App() {
   const confirmDelete = (model: ModelEntry) => {
     Alert.alert(
       '删除模型',
-      model.name + ' 及已配对的投影将一起删除，是否继续？',
+      model.external
+        ? model.name + ' 的外部源文件保留，仅移除引用；已配对的投影将一起删除，是否继续？'
+        : model.name + ' 及已配对的投影将一起删除，是否继续？',
       [
         {text: '取消', style: 'cancel'},
         {
@@ -1320,6 +1334,7 @@ export default function App() {
               {model.name}
             </Text>
             {model.paired ? <EyeIcon /> : null}
+            {model.external ? <Text style={styles.tagExternal}>外部</Text> : null}
             {loadedId === model.id &&
             (runtimePhase === 'model_ready' || runtimePhase === 'generating') ? (
               <Text style={styles.tagLoaded}>已加载</Text>
@@ -1532,6 +1547,9 @@ export default function App() {
           </TouchableOpacity>
           <TouchableOpacity onPress={importModel} style={styles.headerAction}>
             <Text style={styles.headerActionText}>导入</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={importExternalModel} style={styles.headerAction}>
+            <Text style={styles.headerActionText}>引用外部</Text>
           </TouchableOpacity>
         </View>
       );
@@ -1913,6 +1931,7 @@ const styles = StyleSheet.create({
   cardTitle: {flex: 1, fontSize: 15, color: '#111111', fontWeight: '600'},
   cardSub: {fontSize: 12, color: '#333333', marginTop: 4},
   tagLoaded: {fontSize: 12, color: '#1a3faa', marginLeft: 6, fontWeight: '700'},
+  tagExternal: {fontSize: 12, color: '#0a7a42', marginLeft: 6, fontWeight: '700'},
   tagLoading: {fontSize: 12, color: '#b26a00', marginLeft: 6, fontWeight: '700'},
   tagError: {fontSize: 12, color: '#b00020', marginLeft: 6, fontWeight: '700'},
   loadErrorText: {fontSize: 12, color: '#b00020', marginBottom: 8},
