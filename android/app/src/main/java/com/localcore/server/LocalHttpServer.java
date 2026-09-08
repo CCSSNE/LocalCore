@@ -124,35 +124,53 @@ public final class LocalHttpServer {
              BufferedOutputStream rawOutput = new BufferedOutputStream(closeable.getOutputStream())) {
             closeable.setTcpNoDelay(true);
             HttpOutput output = new HttpOutput(rawOutput);
+            String requestId = "req-" + UUID.randomUUID().toString().substring(0, 8);
+            long startedAt = System.currentTimeMillis();
+            HttpRequest request = null;
             try {
-                HttpRequest request = HttpRequest.read(input);
+                request = HttpRequest.read(input);
                 if (request == null) return;
-                authorize(request);
-                route(request, output);
-                events.info("request", request.method + " " + request.target.getPath() + " " + peer);
+                // 全量请求日志：方法 + 完整目标（含查询串）+ 对端 + 全量头（鉴权头脱敏）+ 全量体。
+                // 不截断：自用开发版，完整请求必须落盘，便于与前端日志逐字对照。
+                events.info("request", "--> " + requestId + " " + request.method + " " + request.target
+                        + " from " + peer + " headers=" + maskedHeaders(request) + " body=" + request.bodyText());
+                authorize(request, requestId);
+                route(request, output, requestId, startedAt);
             } catch (HttpProblem problem) {
                 if (!output.headersSent()) output.json(problem.status, HttpOutput.errorBody(problem.type, problem.getMessage()));
-                events.error("request", problem.getMessage() + " " + peer, problem);
+                long elapsed = System.currentTimeMillis() - startedAt;
+                String where = request == null ? peer : request.method + " " + request.target + " " + peer;
+                events.error("request", "<-- " + requestId + " status=" + problem.status + " elapsedMs=" + elapsed
+                        + " " + where + " error=" + problem.type + ":" + problem.getMessage(), problem);
             } catch (Exception error) {
                 if (!output.headersSent()) output.json(500, HttpOutput.errorBody("server_error", error.getMessage()));
-                events.error("request", "请求处理失败 " + peer, error);
+                long elapsed = System.currentTimeMillis() - startedAt;
+                String where = request == null ? peer : request.method + " " + request.target + " " + peer;
+                events.error("request", "<-- " + requestId + " status=500 elapsedMs=" + elapsed
+                        + " " + where + " 请求处理失败", error);
             }
         } catch (IOException error) {
             events.error("request", "连接读写失败 " + peer, error);
         }
     }
 
-    private void route(HttpRequest request, HttpOutput output) throws IOException {
+    private void route(HttpRequest request, HttpOutput output, String requestId, long startedAt) throws IOException {
         String path = request.target.getPath();
         JSONObject routes = config.current().optJSONObject("protocol").optJSONObject("routes");
         if ("GET".equals(request.method) && routes.optString("health").equals(path)) {
-            output.json(200, health());
+            JSONObject body = health();
+            output.json(200, body);
+            events.info("request", "<-- " + requestId + " status=200 elapsedMs="
+                    + (System.currentTimeMillis() - startedAt) + " GET " + path + " body=" + body);
         } else if ("GET".equals(request.method) && routes.optString("models").equals(path)) {
-            output.json(200, models());
+            JSONObject body = models();
+            output.json(200, body);
+            events.info("request", "<-- " + requestId + " status=200 elapsedMs="
+                    + (System.currentTimeMillis() - startedAt) + " GET " + path + " body=" + body);
         } else if ("POST".equals(request.method) && routes.optString("chatCompletions").equals(path)) {
-            chat(parseJson(request), output);
+            chat(parseJson(request), output, requestId, startedAt);
         } else if ("POST".equals(request.method) && routes.optString("completions").equals(path)) {
-            completion(parseJson(request), output);
+            completion(parseJson(request), output, requestId, startedAt);
         } else if ("GET".equals(request.method) || "POST".equals(request.method)) {
             throw new HttpProblem(404, "not_found", "不存在的端点: " + path);
         } else {
@@ -160,12 +178,15 @@ public final class LocalHttpServer {
         }
     }
 
-    private void chat(JSONObject request, HttpOutput output) throws IOException {
+    private void chat(JSONObject request, HttpOutput output, String requestId, long startedAt) throws IOException {
         String modelId = requiredString(request, "model");
         JSONArray messages = request.optJSONArray("messages");
         if (messages == null) throw new HttpProblem(400, "invalid_request", "messages 必须是数组");
         ensureModel(modelId);
         boolean stream = request.optBoolean("stream", false);
+        // 语义日志：模型 + 流式与否 + 全量 OpenAI 请求体，前端对照时只看这一行就知道输入了什么。
+        events.info("request", requestId + " chat model=" + modelId + " stream=" + stream
+                + " messages=" + messages + " body=" + request);
         String completionId = "chatcmpl-" + UUID.randomUUID();
         long created = System.currentTimeMillis() / 1000;
         if (stream) {
@@ -176,17 +197,29 @@ public final class LocalHttpServer {
             if (result.structured) streamMessage(output, completionId, created, modelId, result.message);
             streamFinish(output, completionId, created, modelId, result, finishReason(result.message));
             output.event("[DONE]");
+            events.info("request", "<-- " + requestId + " status=200 elapsedMs="
+                    + (System.currentTimeMillis() - startedAt) + " chat model=" + modelId + " stream=true"
+                    + " promptTokens=" + result.promptTokens + " completionTokens=" + result.completionTokens
+                    + " ttftMs=" + result.ttftMs + " llmMs=" + result.llmMs
+                    + " message=" + result.message + " text=" + result.text);
         } else {
             RuntimeManager.Result result = runtime.chat(messages, request, null);
-            output.json(200, chatResult(completionId, created, modelId, result));
+            JSONObject body = chatResult(completionId, created, modelId, result);
+            output.json(200, body);
+            events.info("request", "<-- " + requestId + " status=200 elapsedMs="
+                    + (System.currentTimeMillis() - startedAt) + " chat model=" + modelId + " stream=false"
+                    + " promptTokens=" + result.promptTokens + " completionTokens=" + result.completionTokens
+                    + " ttftMs=" + result.ttftMs + " llmMs=" + result.llmMs + " body=" + body);
         }
     }
 
-    private void completion(JSONObject request, HttpOutput output) throws IOException {
+    private void completion(JSONObject request, HttpOutput output, String requestId, long startedAt) throws IOException {
         String modelId = requiredString(request, "model");
         String prompt = requiredString(request, "prompt");
         ensureModel(modelId);
         boolean stream = request.optBoolean("stream", false);
+        events.info("request", requestId + " completion model=" + modelId + " stream=" + stream
+                + " prompt=" + prompt + " body=" + request);
         String completionId = "cmpl-" + UUID.randomUUID();
         long created = System.currentTimeMillis() / 1000;
         if (stream) {
@@ -198,6 +231,10 @@ public final class LocalHttpServer {
                     });
             output.event(completionChunk(completionId, created, modelId, "", "stop").toString());
             output.event("[DONE]");
+            events.info("request", "<-- " + requestId + " status=200 elapsedMs="
+                    + (System.currentTimeMillis() - startedAt) + " completion model=" + modelId + " stream=true"
+                    + " promptTokens=" + result.promptTokens + " completionTokens=" + result.completionTokens
+                    + " ttftMs=" + result.ttftMs + " llmMs=" + result.llmMs + " text=" + result.text);
         } else {
             RuntimeManager.Result result = runtime.complete(prompt, request, null);
             JSONObject body = base(completionId, "text_completion", created, modelId);
@@ -210,6 +247,10 @@ public final class LocalHttpServer {
             put(body, "choices", choices);
             put(body, "usage", usage(result));
             output.json(200, body);
+            events.info("request", "<-- " + requestId + " status=200 elapsedMs="
+                    + (System.currentTimeMillis() - startedAt) + " completion model=" + modelId + " stream=false"
+                    + " promptTokens=" + result.promptTokens + " completionTokens=" + result.completionTokens
+                    + " ttftMs=" + result.ttftMs + " llmMs=" + result.llmMs + " body=" + body);
         }
     }
 
@@ -258,13 +299,41 @@ public final class LocalHttpServer {
         return result;
     }
 
-    private void authorize(HttpRequest request) {
-        String key = config.current().optJSONObject("server").optString("apiKey");
-        if (key.isEmpty()) return;
+    private void authorize(HttpRequest request, String requestId) {
+        JSONObject server = config.current().optJSONObject("server");
+        String key = server == null ? "" : server.optString("apiKey");
+        if (key == null || key.isEmpty()) {
+            events.info("request", requestId + " auth=disabled（未配置 API Key，直接放行）");
+            return;
+        }
         String actual = request.headers.get("authorization");
-        if (!("Bearer " + key).equals(actual)) {
+        if (actual == null || actual.isEmpty()) {
+            events.info("request", requestId + " auth=fail（缺少 Authorization 头）");
             throw new HttpProblem(401, "unauthorized", "Bearer API key 无效或缺失");
         }
+        if (!("Bearer " + key).equals(actual)) {
+            events.info("request", requestId + " auth=fail（Bearer 不匹配，期望长度=" + key.length()
+                    + " 实际长度=" + actual.length() + "）");
+            throw new HttpProblem(401, "unauthorized", "Bearer API key 无效或缺失");
+        }
+        events.info("request", requestId + " auth=ok（Bearer 校验通过）");
+    }
+
+    private static String maskedHeaders(HttpRequest request) {
+        StringBuilder masked = new StringBuilder("{");
+        boolean first = true;
+        for (java.util.Map.Entry<String, String> header : request.headers.entrySet()) {
+            if (!first) masked.append(", ");
+            first = false;
+            if ("authorization".equals(header.getKey())) {
+                String value = header.getValue();
+                if (value.regionMatches(true, 0, "Bearer ", 0, 7)) masked.append("authorization=Bearer ***");
+                else masked.append("authorization=***");
+            } else {
+                masked.append(header.getKey()).append('=').append(header.getValue());
+            }
+        }
+        return masked.append('}').toString();
     }
 
     private static JSONObject parseJson(HttpRequest request) {
