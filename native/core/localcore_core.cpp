@@ -5,6 +5,7 @@
 #include "common.h"
 #include "json.h"
 #include "llama.h"
+#include "llama-ext.h"
 #include "mtmd-helper.h"
 #include "mtmd.h"
 #include "sampling.h"
@@ -112,6 +113,41 @@ int32_t int_value(const common_json & object, const char * key, int32_t fallback
 
 float float_value(const common_json & object, const char * key, float fallback) {
     return object.contains(key) ? object.at(key).get<float>() : fallback;
+}
+
+// Loading and planning must use the same parameters; only allocation mode differs.
+llama_context_params context_parameters(const common_json & request, PrefillProgress & progress) {
+    llama_context_params params = llama_context_default_params();
+    auto integer = [&](const char * key, int64_t minimum) {
+        const auto & value = required(request, key);
+        if (!value.is_number_integer()) throw std::invalid_argument(std::string(key) + " 必须是整数");
+        const int64_t number = value.get<int64_t>();
+        if (number < minimum || number > INT32_MAX) {
+            throw std::invalid_argument(std::string(key) + " 超出当前核心整型参数范围: "
+                    + std::to_string(minimum) + ".." + std::to_string(INT32_MAX));
+        }
+        return static_cast<int32_t>(number);
+    };
+    params.n_ctx = static_cast<uint32_t>(integer("contextSize", 0));
+    params.n_batch = static_cast<uint32_t>(integer("batchSize", 1));
+    params.n_ubatch = params.n_batch;
+    params.n_threads = integer("threads", 1);
+    params.n_threads_batch = params.n_threads;
+    params.cb_eval_graph = PrefillProgress::Graph::begin;
+    params.cb_eval = PrefillProgress::Graph::eval;
+    params.cb_eval_user_data = &progress.llm;
+    return params;
+}
+
+mtmd_context_params vision_parameters(int threads, PrefillProgress & progress) {
+    mtmd_context_params params = mtmd_context_params_default();
+    params.use_gpu = false;
+    params.n_threads = threads;
+    params.warmup = false;
+    params.cb_eval_graph = PrefillProgress::Graph::begin;
+    params.cb_eval = PrefillProgress::Graph::eval;
+    params.cb_eval_user_data = &progress.vision;
+    return params;
 }
 
 bool bool_value(const common_json & object, const char * key, bool fallback) {
@@ -370,27 +406,13 @@ extern "C" LOCALCORE_EXPORT int localcore_core_load_model(
         std::string model_path = required(request, "modelPath").get<std::string>();
         runtime.model = llama_model_load_from_file(model_path.c_str(), model_params);
         if (runtime.model == nullptr) throw std::runtime_error("llama.cpp 无法加载模型: " + model_path);
-        llama_context_params context_params = llama_context_default_params();
-        context_params.n_ctx = static_cast<uint32_t>(int_value(request, "contextSize", 4096));
-        runtime.batch_size = int_value(request, "batchSize", 512);
-        context_params.n_batch = static_cast<uint32_t>(runtime.batch_size);
-        context_params.n_ubatch = static_cast<uint32_t>(runtime.batch_size);
-        context_params.n_threads = int_value(request, "threads", 4);
-        context_params.n_threads_batch = context_params.n_threads;
-        context_params.cb_eval_graph = PrefillProgress::Graph::begin;
-        context_params.cb_eval = PrefillProgress::Graph::eval;
-        context_params.cb_eval_user_data = &runtime.progress.llm;
+        llama_context_params context_params = context_parameters(request, runtime.progress);
+        runtime.batch_size = static_cast<int32_t>(context_params.n_batch);
         runtime.context = llama_init_from_model(runtime.model, context_params);
         if (runtime.context == nullptr) throw std::runtime_error("llama.cpp 无法创建推理上下文");
         std::string mmproj_path = string_value(request, "mmprojPath");
         if (!mmproj_path.empty()) {
-            mtmd_context_params mtmd_params = mtmd_context_params_default();
-            mtmd_params.use_gpu = false;
-            mtmd_params.n_threads = context_params.n_threads;
-            mtmd_params.warmup = false;
-            mtmd_params.cb_eval_graph = PrefillProgress::Graph::begin;
-            mtmd_params.cb_eval = PrefillProgress::Graph::eval;
-            mtmd_params.cb_eval_user_data = &runtime.progress.vision;
+            mtmd_context_params mtmd_params = vision_parameters(context_params.n_threads, runtime.progress);
             runtime.vision = mtmd_init_from_file(mmproj_path.c_str(), runtime.model, mtmd_params);
             if (runtime.vision == nullptr) throw std::runtime_error("MTMD 无法加载 MMPROJ: " + mmproj_path);
             if (!mtmd_support_vision(runtime.vision)) throw std::runtime_error("MMPROJ 不支持图片输入");
@@ -408,6 +430,58 @@ extern "C" LOCALCORE_EXPORT int localcore_core_load_model(
         return 0;
     } catch (const std::exception & failure) {
         try { engine(instance).unload(); } catch (...) {}
+        set_string(error, failure.what());
+        return 1;
+    }
+}
+
+extern "C" LOCALCORE_EXPORT int localcore_core_estimate_memory(
+        void * instance, const char * request_json, char ** result_json, char ** error) {
+    if (result_json != nullptr) *result_json = nullptr;
+    if (error != nullptr) *error = nullptr;
+    try {
+        Engine & runtime = engine(instance);
+        std::lock_guard<std::mutex> lock(runtime.operation);
+        const common_json request = common_json::parse(request_json == nullptr ? "" : request_json);
+        // A separate progress object keeps graph reservation away from the active model's state.
+        std::atomic_bool cancelled{false};
+        PrefillProgress progress{cancelled};
+        const auto context_params = context_parameters(request, progress);
+        auto model_params = llama_model_default_params();
+        model_params.no_alloc = true;
+        model_params.load_mode = LLAMA_LOAD_MODE_NONE;
+        const std::string path = required(request, "modelPath").get<std::string>();
+        owned<llama_model, llama_model_free> model(
+                llama_model_load_from_file(path.c_str(), model_params), llama_model_free);
+        if (!model) throw std::runtime_error("内存估算无法读取模型结构: " + path);
+        owned<llama_context, llama_free> context(llama_init_from_model(model.get(), context_params), llama_free);
+        if (!context) throw std::runtime_error("内存估算无法规划上下文和计算图");
+        uint64_t weights = 0, cache = 0, compute = 0, mmproj = 0;
+        for (const auto & entry : llama_get_memory_breakdown(context.get())) {
+            weights += entry.second.model;
+            cache += entry.second.context;
+            compute += entry.second.compute;
+        }
+        const std::string mmproj_path = string_value(request, "mmprojPath");
+        if (!mmproj_path.empty()) {
+            const auto memory = mtmd_get_memory_usage(mmproj_path.c_str(),
+                    vision_parameters(context_params.n_threads, progress));
+            // A projector without any reported allocations is not a valid estimate.
+            if (memory.empty()) throw std::runtime_error("内存估算无法规划 MMPROJ: " + mmproj_path);
+            for (const auto & entry : memory) mmproj += entry.second;
+        }
+        common_json result = common_json::object({
+                {"version", localcore_core_version()},
+                {"modelBytes", weights}, {"contextBytes", cache}, {"computeBytes", compute},
+                {"mmprojBytes", mmproj}, {"totalBytes", weights + cache + compute + mmproj},
+                {"contextSize", llama_n_ctx(context.get())},
+                {"batchSize", llama_n_batch(context.get())},
+                {"microBatchSize", llama_n_ubatch(context.get())},
+                {"hasMmproj", !mmproj_path.empty()},
+        });
+        set_string(result_json, result.dump());
+        return 0;
+    } catch (const std::exception & failure) {
         set_string(error, failure.what());
         return 1;
     }

@@ -442,6 +442,13 @@ class BackendModule(private val reactContext: ReactApplicationContext) :
   }
 
   @ReactMethod
+  fun estimateModelMemory(modelId: String, loadJson: String, promise: Promise) {
+    runAsync(promise, "MEMORY_ESTIMATE_FAILED") {
+      application.graph.runtime.estimateMemory(modelId, loadJson)
+    }
+  }
+
+  @ReactMethod
   fun setModelSettings(modelId: String, loadJson: String, inferenceJson: String, promise: Promise) {
     runAsync(promise, "SETTINGS_FAILED") {
       application.graph.exchange.setModelSettings(modelId, loadJson, inferenceJson)

@@ -41,6 +41,10 @@ LOCALCORE_EXPORT void * localcore_core_create(char ** error);
 LOCALCORE_EXPORT void localcore_core_destroy(void * instance);
 LOCALCORE_EXPORT int localcore_core_load_model(
         void * instance, const char * request_json, char ** result_json, char ** error);
+// Additive ABI 1 capability. Simulates allocations without replacing the loaded model.
+// Returns model/context/compute/mmproj/total bytes and the effective context parameters.
+LOCALCORE_EXPORT int localcore_core_estimate_memory(
+        void * instance, const char * request_json, char ** result_json, char ** error);
 LOCALCORE_EXPORT int localcore_core_unload_model(void * instance, char ** error);
 LOCALCORE_EXPORT int localcore_core_infer(
         void * instance,

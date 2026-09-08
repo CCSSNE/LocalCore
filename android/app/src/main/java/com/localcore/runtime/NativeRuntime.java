@@ -21,6 +21,17 @@ public final class NativeRuntime implements AutoCloseable {
         return nativeLoadModel(requireHandle(), requestJson);
     }
 
+    public synchronized String estimateMemory(String path, String requestJson) {
+        if (path.equals(corePath) && handle != 0) {
+            return nativeEstimateMemory(handle, requestJson);
+        }
+        // Planning a model bound to another core must not replace the active core/model.
+        try (NativeRuntime planner = new NativeRuntime()) {
+            planner.openCore(path);
+            return nativeEstimateMemory(planner.requireHandle(), requestJson);
+        }
+    }
+
     public interface ProgressConsumer {
         void onProgress(String phase, int done, int total);
     }
@@ -68,6 +79,7 @@ public final class NativeRuntime implements AutoCloseable {
 
     private static native long nativeOpenCore(String path);
     private static native String nativeLoadModel(long handle, String requestJson);
+    private static native String nativeEstimateMemory(long handle, String requestJson);
     private static native String nativeInfer(long handle, String requestJson, RuntimeManager.TokenConsumer consumer);
     private static native String nativeInfer2(long handle, String requestJson,
             RuntimeManager.TokenConsumer tokenConsumer, ProgressConsumer progressConsumer);

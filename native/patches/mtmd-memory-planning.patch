@@ -1,0 +1,116 @@
+--- a/tools/mtmd/clip.cpp
++++ b/tools/mtmd/clip.cpp
+@@ -3602,7 +3602,18 @@
+ 
+             // alloc memory and offload data
+             ggml_backend_buffer_type_t buft = ggml_backend_get_default_buffer_type(ctx_clip.backend);
+-            ctx_clip.buf.reset(ggml_backend_alloc_ctx_tensors_from_buft(ctx_clip.ctx_data.get(), buft));
++            ctx_clip.mem_usage[ggml_backend_get_device(ctx_clip.backend)] =
++                    ggml_backend_alloc_ctx_tensors_from_buft_size(ctx_clip.ctx_data.get(), buft);
++            if (ctx_clip.no_alloc) {
++                ctx_clip.buf.reset(ggml_backend_buft_alloc_buffer(buft, 0));
++                for (ggml_tensor * t = ggml_get_first_tensor(ctx_clip.ctx_data.get()); t != nullptr;
++                        t = ggml_get_next_tensor(ctx_clip.ctx_data.get(), t)) {
++                    t->buffer = ctx_clip.buf.get();
++                }
++            } else {
++                ctx_clip.buf.reset(ggml_backend_alloc_ctx_tensors_from_buft(ctx_clip.ctx_data.get(), buft));
++            }
++            if (!ctx_clip.buf) throw std::runtime_error("unable to create CLIP weight buffer");
+             ggml_backend_buffer_set_usage(ctx_clip.buf.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+             // read the weight from file
+             if (!ctx_clip.no_alloc) {
+@@ -3766,13 +3777,19 @@
+     // only initialize backend buffers, but do not allocate them yet
+     static support_info_graph reserve_compute_meta(clip_ctx & ctx_clip, const clip_image_f32_batch & batch) {
+         ggml_cgraph * gf = clip_get_graph_builder(&ctx_clip, batch)->build();
+-        ggml_backend_sched_reserve(ctx_clip.sched.get(), gf);
++        std::vector<size_t> planned_sizes(ctx_clip.backend_ptrs.size());
++        if (ctx_clip.no_alloc) {
++            ggml_backend_sched_reserve_size(ctx_clip.sched.get(), gf, planned_sizes.data());
++        } else if (!ggml_backend_sched_reserve(ctx_clip.sched.get(), gf)) {
++            throw std::runtime_error("unable to reserve CLIP compute buffers");
++        }
+ 
+         ctx_clip.mem_compute.clear();
+         for (size_t i = 0; i < ctx_clip.backend_ptrs.size(); ++i) {
+             ggml_backend_t backend = ctx_clip.backend_ptrs[i];
+             ggml_backend_buffer_type_t buft = ctx_clip.backend_buft[i];
+-            size_t size = ggml_backend_sched_get_buffer_size(ctx_clip.sched.get(), backend);
++            size_t size = ctx_clip.no_alloc ? planned_sizes[i]
++                    : ggml_backend_sched_get_buffer_size(ctx_clip.sched.get(), backend);
+             if (size > 1) {
+                 LOG_INF("%s: %10s compute buffer size = %8.2f MiB\n", __func__,
+                         ggml_backend_buft_name(buft),
+@@ -3975,7 +3992,7 @@
+             loader.load_hparams(ctx_vision->model, CLIP_MODALITY_VISION);
+             loader.load_tensors(*ctx_vision);
+             loader.init_ctx(*ctx_vision);
+-            if (ctx_params.warmup) {
++            if (ctx_params.warmup || ctx_params.no_alloc) {
+                 loader.warmup(*ctx_vision);
+             }
+ 
+@@ -3989,7 +4006,7 @@
+             loader.load_hparams(ctx_audio->model, CLIP_MODALITY_AUDIO);
+             loader.load_tensors(*ctx_audio);
+             loader.init_ctx(*ctx_audio);
+-            if (ctx_params.warmup) {
++            if (ctx_params.warmup || ctx_params.no_alloc) {
+                 loader.warmup(*ctx_audio);
+             }
+         }
+--- a/tools/mtmd/mtmd.cpp
++++ b/tools/mtmd/mtmd.cpp
+@@ -2698,38 +2698,19 @@
+     }
+ }
+ 
+-static void stub_log_callback(enum ggml_log_level, const char *, void *) {
+-    // do nothing
+-}
+-
+ std::map<ggml_backend_dev_t, size_t> mtmd_get_memory_usage(const char * mmproj_fname,
+                                                             struct mtmd_context_params ctx_params) {
++    ctx_params.progress_callback = nullptr;
++    // Planning failures and their logs must reach the caller, not become an empty estimate.
+     mtmd::context_ptr ctx;
+-    auto saved_log_callback = g_logger_state.log_callback;
+-    auto saved_log_user_data = g_logger_state.log_callback_user_data;
+-
+-    ctx_params.progress_callback = nullptr;
+-
+-    try {
+-        mtmd_log_set(stub_log_callback, nullptr); // suppress logging
+-        ctx.reset(new mtmd_context(mmproj_fname, nullptr, ctx_params, true));
+-        mtmd_log_set(saved_log_callback, saved_log_user_data); // restore log callback
+-        std::map<ggml_backend_dev_t, size_t> total_mem;
+-        auto merge = [&](const struct clip_ctx * c) {
+-            for (auto & [dev, size] : clip_get_mem_usage(c)) {
+-                total_mem[dev] += size;
+-            }
+-        };
+-        if (ctx->ctx_v) {
+-            merge(ctx->ctx_v);
+-        }
+-        if (ctx->ctx_a) {
+-            merge(ctx->ctx_a);
+-        }
+-        return total_mem;
+-    } catch (const std::exception & e) {
+-        mtmd_log_set(saved_log_callback, saved_log_user_data); // restore log callback
+-        LOG_ERR("%s: error: %s\n", __func__, e.what());
+-        return {};
+-    }
+-}
++    ctx.reset(new mtmd_context(mmproj_fname, nullptr, ctx_params, true));
++    std::map<ggml_backend_dev_t, size_t> total_mem;
++    auto merge = [&](const struct clip_ctx * c) {
++        for (auto & [dev, size] : clip_get_mem_usage(c)) {
++            total_mem[dev] += size;
++        }
++    };
++    if (ctx->ctx_v) merge(ctx->ctx_v);
++    if (ctx->ctx_a) merge(ctx->ctx_a);
++    return total_mem;
++}

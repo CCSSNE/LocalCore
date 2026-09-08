@@ -228,6 +228,30 @@ Java_com_localcore_runtime_NativeRuntime_nativeLoadModel(
 }
 
 extern "C" JNIEXPORT jstring JNICALL
+Java_com_localcore_runtime_NativeRuntime_nativeEstimateMemory(
+        JNIEnv * env, jclass, jlong handle, jstring request) {
+    try {
+        Core * core = from(handle);
+        std::lock_guard<std::mutex> lock(core->operation);
+        auto estimate = optional_symbol<load_model_fn>(core->library, "localcore_core_estimate_memory");
+        if (estimate == nullptr) {
+            throw std::runtime_error("当前核心不支持内存估算，请更新核心 SO（缺少 localcore_core_estimate_memory）");
+        }
+        std::string json = utf8(env, request);
+        char * result = nullptr;
+        char * error = nullptr;
+        const int code = estimate(core->instance, json.c_str(), &result, &error);
+        std::string output = take(core, result);
+        std::string detail = take(core, error);
+        if (code != 0) throw std::runtime_error(detail);
+        return java_string(env, output.data(), output.size());
+    } catch (const std::exception & error) {
+        throw_java(env, error.what());
+        return nullptr;
+    }
+}
+
+extern "C" JNIEXPORT jstring JNICALL
 Java_com_localcore_runtime_NativeRuntime_nativeInfer(
         JNIEnv * env, jclass, jlong handle, jstring request, jobject callback) {
     try {

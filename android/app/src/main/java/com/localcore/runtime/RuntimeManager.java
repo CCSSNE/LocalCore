@@ -106,32 +106,20 @@ public final class RuntimeManager {
             String coreId = model.getString("core");
             File coreFile = resources.installedFile(coreId);
             String resourceId = model.getString("resource");
-            JSONObject resourceDescriptor = findResource(resourceId);
-            String externalUri = resourceDescriptor.optString("externalUri");
-            String modelPath;
-            if (externalUri.isEmpty()) {
-                modelPath = resources.installedFile(resourceId).getAbsolutePath();
-            } else {
-                ParcelFileDescriptor handle = ExternalFile.openRegularFile(
-                        context.getContentResolver(), Uri.parse(externalUri));
+            ParcelFileDescriptor handle = openExternalModel(resourceId);
+            if (handle != null) {
                 synchronized (externalHandles) {
                     externalHandles.put(resourceId, handle);
                 }
                 openedExternal = resourceId;
-                modelPath = ExternalFile.fdPath(handle);
             }
+            String modelPath = modelPath(resourceId, handle);
             JSONObject coreDescriptor = findResource(coreId);
             JSONObject load = model.getJSONObject("load");
             setState(new RuntimeState(RuntimeState.Phase.MODEL_LOADING, coreId,
                     coreDescriptor.optString("version"), modelId, null));
             nativeRuntime.openCore(coreFile.getAbsolutePath());
-            JSONObject request = new JSONObject();
-            request.put("modelPath", modelPath);
-            String mmprojId = model.optString("mmproj");
-            if (!mmprojId.isEmpty()) request.put("mmprojPath", resources.installedFile(mmprojId).getAbsolutePath());
-            request.put("contextSize", load.getInt("contextSize"));
-            request.put("batchSize", load.getInt("batchSize"));
-            request.put("threads", load.getInt("threads"));
+            JSONObject request = modelRequest(model, load, modelPath);
             JSONObject template = model.optJSONObject("template");
             if (template != null && "custom".equals(template.optString("mode"))) {
                 String custom = template.optString("value", "");
@@ -160,6 +148,48 @@ public final class RuntimeManager {
         } finally {
             inference.unlock();
         }
+    }
+
+    public String estimateMemory(String modelId, String loadJson) {
+        inference.lock();
+        try {
+            JSONObject model = findModel(modelId);
+            String corePath = resources.installedFile(model.getString("core")).getAbsolutePath();
+            String resourceId = model.getString("resource");
+            // The planning descriptor has its own lifetime; never close the loaded model's FD.
+            try (ParcelFileDescriptor handle = openExternalModel(resourceId)) {
+                JSONObject request = modelRequest(model, new JSONObject(loadJson), modelPath(resourceId, handle));
+                String result = nativeRuntime.estimateMemory(corePath, request.toString());
+                events.info("runtime", "模型内存估算 " + modelId + "，参数=" + loadJson + "，结果=" + result);
+                return result;
+            }
+        } catch (Exception error) {
+            events.error("runtime", "模型内存估算失败 " + modelId + "，参数=" + loadJson, error);
+            throw asRuntime(error);
+        } finally {
+            inference.unlock();
+        }
+    }
+
+    private ParcelFileDescriptor openExternalModel(String resourceId) throws Exception {
+        String uri = findResource(resourceId).optString("externalUri");
+        return uri.isEmpty() ? null : ExternalFile.openRegularFile(context.getContentResolver(), Uri.parse(uri));
+    }
+
+    private String modelPath(String resourceId, ParcelFileDescriptor handle) {
+        return handle == null ? resources.installedFile(resourceId).getAbsolutePath() : ExternalFile.fdPath(handle);
+    }
+
+    private JSONObject modelRequest(JSONObject model, JSONObject load, String path) throws Exception {
+        JSONObject request = new JSONObject();
+        request.put("modelPath", path);
+        String mmprojId = model.optString("mmproj");
+        if (!mmprojId.isEmpty()) request.put("mmprojPath", resources.installedFile(mmprojId).getAbsolutePath());
+        // Preserve numeric values for the shared core parameter parser; do not truncate drafts in Java.
+        request.put("contextSize", load.get("contextSize"));
+        request.put("batchSize", load.get("batchSize"));
+        request.put("threads", load.get("threads"));
+        return request;
     }
 
     public void unload() {

@@ -1,7 +1,7 @@
 param(
     [string]$LlamaTag = 'v0.4.0',
     [string]$LlamaCommit = '5266f24da75dc449bd56cbed7addb9c8e4a6a73e',
-    [string]$CoreVersion = '0.4.0-localcore.10',
+    [string]$CoreVersion = '0.4.0-localcore.11',
     [string[]]$Abis = @('arm64-v8a', 'x86_64'),
     [int]$Parallel = 4
 )
@@ -28,16 +28,22 @@ if ($LASTEXITCODE -ne 0) { throw 'llama.cpp checkout failed' }
 $commit = (git -C $llamaDir rev-parse HEAD).Trim()
 if ($commit -ne $LlamaCommit) { throw "Pinned llama.cpp commit mismatch: expected $LlamaCommit, got $commit" }
 
-# Keep the observation hook reproducible; never hand-edit the cached upstream.
-$progressPatch = Join-Path $repoRoot 'native\patches\llama-graph-progress.patch'
-git -C $llamaDir apply --reverse --check $progressPatch 2>$null
-if ($LASTEXITCODE -ne 0) {
-    git -C $llamaDir apply --check $progressPatch
-    if ($LASTEXITCODE -ne 0) { throw 'llama.cpp progress patch does not match the pinned source' }
-    git -C $llamaDir apply $progressPatch
-    if ($LASTEXITCODE -ne 0) { throw 'llama.cpp progress patch failed' }
+# Keep core patches reproducible; never hand-edit the cached upstream.
+$patchMetadata = @()
+foreach ($patchName in @('llama-graph-progress.patch', 'mtmd-memory-planning.patch')) {
+    $patchPath = Join-Path $repoRoot "native\patches\$patchName"
+    git -C $llamaDir apply --reverse --check $patchPath 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        git -C $llamaDir apply --check $patchPath
+        if ($LASTEXITCODE -ne 0) { throw "$patchName does not match the pinned source" }
+        git -C $llamaDir apply $patchPath
+        if ($LASTEXITCODE -ne 0) { throw "$patchName failed" }
+    }
+    $patchMetadata += [ordered]@{
+        name = $patchName
+        sha256 = (Get-FileHash -Algorithm SHA256 $patchPath).Hash.ToLowerInvariant()
+    }
 }
-$progressPatchHash = (Get-FileHash -Algorithm SHA256 $progressPatch).Hash.ToLowerInvariant()
 
 New-Item -ItemType Directory -Force $buildRoot, $distRoot | Out-Null
 $packageRoot = Join-Path $distRoot "localcore-core-$CoreVersion"
@@ -82,7 +88,7 @@ $metadata = [ordered]@{
     coreVersion = $CoreVersion
     llamaTag = $LlamaTag
     llamaCommit = $commit
-    patches = @([ordered]@{ name = 'llama-graph-progress.patch'; sha256 = $progressPatchHash })
+    patches = $patchMetadata
     abis = $Abis
     libraries = $libraries
 }

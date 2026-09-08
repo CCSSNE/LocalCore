@@ -19,6 +19,7 @@ import {
 import ImageView from 'react-native-image-viewing';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import ModelDownloadScreen from './ModelDownloadScreen';
+import ModelMemoryEstimate from './ModelMemoryEstimate';
 
 const {Backend} = NativeModules;
 const chatEvents = new NativeEventEmitter(NativeModules.Backend);
@@ -313,6 +314,7 @@ export default function App() {
   const [tplText, setTplText] = useState('');
   const [tplLoading, setTplLoading] = useState(false);
   const [stForm, setStForm] = useState<Record<string, string>>({});
+  const modelSettingsRequest = useRef(0);
   const [hotForm, setHotForm] = useState<Record<string, string>>(hotToForm(DEFAULT_HOT));
   const [hotOrig, setHotOrig] = useState<Record<string, string>>(hotToForm(DEFAULT_HOT));
   const hotNums = useRef<Record<string, any>>({...DEFAULT_HOT});
@@ -1108,6 +1110,7 @@ export default function App() {
   };
 
   const openModelSettings = (model: ModelEntry) => {
+    const request = ++modelSettingsRequest.current;
     setTplModel(model);
     setTplText('');
     setStForm({});
@@ -1116,6 +1119,7 @@ export default function App() {
     setTplOpen(true);
     Promise.all([Backend.getModelSettings(model.id), Backend.getModelTemplate(model.id)])
       .then(([settings, text]: any[]) => {
+        if (request !== modelSettingsRequest.current) return;
         const root = JSON.parse(String(settings ?? '{}'));
         const form: Record<string, string> = {};
         for (const field of LOAD_FIELDS) {
@@ -1129,12 +1133,14 @@ export default function App() {
         setTplLoading(false);
       })
       .catch((e: any) => {
+        if (request !== modelSettingsRequest.current) return;
         setTplLoading(false);
         push('fail', 'FAIL 读取模型设置 => ' + (e?.message ?? String(e)));
       });
   };
 
   const closeModelSettings = () => {
+    modelSettingsRequest.current++;
     setTplOpen(false);
     if (!tplModel || !stOrig.ready) return;
     const id = tplModel.id;
@@ -1956,7 +1962,13 @@ export default function App() {
               <ScrollView style={styles.tplScroll}>
                 {LOAD_FIELDS.map(field => (
                   <View key={field.key}>
-                    <Text style={styles.hint}>{field.label}</Text>
+                    <View style={styles.loadFieldHeading}>
+                      <Text style={styles.hint}>{field.label}</Text>
+                      {field.key === 'contextSize' && tplOpen && tplModel && stOrig.ready && (
+                        <ModelMemoryEstimate key={tplModel.id} modelId={tplModel.id}
+                          loadJson={stOrig.loadJson} form={stForm} />
+                      )}
+                    </View>
                     <TextInput
                       value={stForm[field.key] ?? ''}
                       onChangeText={v => setStForm(prev => ({...prev, [field.key]: v}))}
@@ -2217,6 +2229,7 @@ const styles = StyleSheet.create({
   screenContent: {padding: 16},
   centerBox: {alignItems: 'center', paddingVertical: 24},
   hint: {fontSize: 13, color: '#666666', lineHeight: 20},
+  loadFieldHeading: {flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between'},
   actionBar: {flexDirection: 'row', padding: 12, borderBottomWidth: 1, borderBottomColor: '#e5e5e5'},
   // 填充条 width 百分比按容器内容盒结算，容器禁一切内边距，否则满格也盖不住 padding 区。
   updateBar: {

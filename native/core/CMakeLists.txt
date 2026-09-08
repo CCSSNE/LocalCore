@@ -28,6 +28,7 @@ target_compile_options(localcore_core PRIVATE -Wall -Wextra -fvisibility=hidden)
 target_include_directories(localcore_core PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../include
     ${LLAMA_CPP_DIR}/include
+    ${LLAMA_CPP_DIR}/src
     ${LLAMA_CPP_DIR}/common
     ${LLAMA_CPP_DIR}/tools/mtmd)
 target_link_libraries(localcore_core PRIVATE llama-common mtmd)
