@@ -71,6 +71,15 @@ LOCALCORE_EXPORT int localcore_core_infer3(
         void * progress_user_data,
         char ** result_json,
         char ** error);
+// Additive ABI 1: callback contains UTF-8 JSON assistant deltas (content,
+// reasoning_content, indexed tool_calls). Result includes finishReason.
+// Return codes: 0 success, 1 core failure, 2 invalid request, 3 cancellation.
+// Existing infer/infer2/infer3 retain plain content callbacks.
+LOCALCORE_EXPORT int localcore_core_infer4(
+        void * instance, const char * request_json,
+        localcore_token_callback event_callback, void * event_user_data,
+        localcore_progress_callback2 progress_callback, void * progress_user_data,
+        char ** result_json, char ** error);
 LOCALCORE_EXPORT void localcore_core_cancel(void * instance);
 LOCALCORE_EXPORT void localcore_core_free_string(char * value);
 

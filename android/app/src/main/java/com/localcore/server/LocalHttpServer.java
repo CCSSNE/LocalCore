@@ -136,19 +136,28 @@ public final class LocalHttpServer {
                         + " from " + peer + " headers=" + maskedHeaders(request) + " body=" + request.bodyText());
                 authorize(request, requestId);
                 route(request, output, requestId, startedAt);
-            } catch (HttpProblem problem) {
-                if (!output.headersSent()) output.json(problem.status, HttpOutput.errorBody(problem.type, problem.getMessage()));
-                long elapsed = System.currentTimeMillis() - startedAt;
-                String where = request == null ? peer : request.method + " " + request.target + " " + peer;
-                events.error("request", "<-- " + requestId + " status=" + problem.status + " elapsedMs=" + elapsed
-                        + " " + where + " error=" + problem.type + ":" + problem.getMessage(), problem);
             } catch (Exception error) {
-                if (!output.headersSent()) output.json(500, HttpOutput.errorBody("server_error", error.getMessage()));
-                long elapsed = System.currentTimeMillis() - startedAt;
-                String where = request == null ? peer : request.method + " " + request.target + " " + peer;
-                events.error("request", "<-- " + requestId + " status=500 elapsedMs=" + elapsed
-                        + " " + where + " 请求处理失败", error);
+                int status = 500;
+                String type = "server_error";
+                if (error instanceof HttpProblem) {
+                    status = ((HttpProblem) error).status;
+                    type = ((HttpProblem) error).type;
+                } else if (error instanceof IllegalArgumentException) {
+                    status = 400;
+                    type = "invalid_request";
+                } else if (error instanceof java.util.concurrent.CancellationException) {
+                    status = 409;
+                    type = "cancelled";
+                }
+                boolean streaming = output.headersSent();
+                events.error("request", "<-- " + requestId + " httpStatus=" + (streaming ? 200 : status)
+                        + " outcome=failed errorType=" + type + " elapsedMs=" + (System.currentTimeMillis() - startedAt)
+                        + " peer=" + peer + " error=" + error.getMessage(), error);
+                // A stream cannot change its HTTP status. Send an explicit error, never a success finish.
+                if (streaming) output.event(HttpOutput.errorBody(type, error.getMessage()).toString());
+                else output.json(status, HttpOutput.errorBody(type, error.getMessage()));
             }
+
         } catch (IOException error) {
             events.error("request", "连接读写失败 " + peer, error);
         }
@@ -190,12 +199,24 @@ public final class LocalHttpServer {
         String completionId = "chatcmpl-" + UUID.randomUUID();
         long created = System.currentTimeMillis() / 1000;
         if (stream) {
-            output.startEvents();
-            streamRole(output, completionId, created, modelId);
             RuntimeManager.Result result = runtime.chat(messages, request,
-                    token -> streamToken(output, completionId, created, modelId, token));
-            if (result.structured) streamMessage(output, completionId, created, modelId, result.message);
-            streamFinish(output, completionId, created, modelId, result, finishReason(result.message));
+                    (RuntimeManager.EventConsumer) token -> {
+                        if (!output.headersSent()) {
+                            output.startEvents();
+                            streamRole(output, completionId, created, modelId);
+                        }
+                        try {
+                            output.event(chatChunk(completionId, created, modelId, new JSONObject(token), null, null).toString());
+                        } catch (JSONException error) {
+                            throw new IllegalStateException("Invalid core event JSON", error);
+                        }
+                        return true;
+                    });
+            if (!output.headersSent()) {
+                output.startEvents();
+                streamRole(output, completionId, created, modelId);
+            }
+            streamFinish(output, completionId, created, modelId, result, result.finishReason);
             output.event("[DONE]");
             events.info("request", "<-- " + requestId + " status=200 elapsedMs="
                     + (System.currentTimeMillis() - startedAt) + " chat model=" + modelId + " stream=true"
@@ -223,13 +244,14 @@ public final class LocalHttpServer {
         String completionId = "cmpl-" + UUID.randomUUID();
         long created = System.currentTimeMillis() / 1000;
         if (stream) {
-            output.startEvents();
             RuntimeManager.Result result = runtime.complete(prompt, request,
                     token -> {
+                        if (!output.headersSent()) output.startEvents();
                         output.event(completionChunk(completionId, created, modelId, token, null).toString());
                         return true;
                     });
-            output.event(completionChunk(completionId, created, modelId, "", "stop").toString());
+            if (!output.headersSent()) output.startEvents();
+            output.event(completionChunk(completionId, created, modelId, "", result.finishReason).toString());
             output.event("[DONE]");
             events.info("request", "<-- " + requestId + " status=200 elapsedMs="
                     + (System.currentTimeMillis() - startedAt) + " completion model=" + modelId + " stream=true"
@@ -242,7 +264,7 @@ public final class LocalHttpServer {
             JSONObject choice = new JSONObject();
             put(choice, "index", 0);
             put(choice, "text", result.text);
-            put(choice, "finish_reason", "stop");
+            put(choice, "finish_reason", result.finishReason);
             choices.put(choice);
             put(body, "choices", choices);
             put(body, "usage", usage(result));
@@ -351,7 +373,7 @@ public final class LocalHttpServer {
         JSONObject choice = new JSONObject();
         put(choice, "index", 0);
         put(choice, "message", message);
-        put(choice, "finish_reason", finishReason(message));
+        put(choice, "finish_reason", result.finishReason);
         JSONArray choices = new JSONArray();
         choices.put(choice);
         put(body, "choices", choices);
@@ -365,33 +387,9 @@ public final class LocalHttpServer {
         output.event(chatChunk(id, created, model, delta, null, null).toString());
     }
 
-    private static boolean streamToken(HttpOutput output, String id, long created, String model, String token)
-            throws IOException {
-        JSONObject delta = new JSONObject();
-        put(delta, "content", token);
-        output.event(chatChunk(id, created, model, delta, null, null).toString());
-        return true;
-    }
-
-    private static void streamMessage(HttpOutput output, String id, long created, String model,
-                                      JSONObject message) throws IOException {
-        JSONObject delta = new JSONObject();
-        java.util.Iterator<String> keys = message.keys();
-        while (keys.hasNext()) {
-            String key = keys.next();
-            if (!"role".equals(key) && !"content".equals(key)) put(delta, key, message.opt(key));
-        }
-        if (delta.length() > 0) output.event(chatChunk(id, created, model, delta, null, null).toString());
-    }
-
     private static void streamFinish(HttpOutput output, String id, long created, String model,
                                      RuntimeManager.Result result, String reason) throws IOException {
         output.event(chatChunk(id, created, model, new JSONObject(), reason, usage(result)).toString());
-    }
-
-    private static String finishReason(JSONObject message) {
-        return message != null && message.optJSONArray("tool_calls") != null
-                && message.optJSONArray("tool_calls").length() > 0 ? "tool_calls" : "stop";
     }
 
     private static JSONObject chatChunk(String id, long created, String model, JSONObject delta,

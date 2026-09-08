@@ -31,6 +31,9 @@ public final class RuntimeManager {
         boolean onToken(String token) throws IOException;
     }
 
+    /** Receives core-parsed JSON deltas; plain consumers receive only content. */
+    public interface EventConsumer extends TokenConsumer {}
+
     public interface StageListener {
         void onStage(String stage);
     }
@@ -52,9 +55,10 @@ public final class RuntimeManager {
         public final long ttftMs;
         public final long llmMs;
         public final JSONObject generation;
+        public final String finishReason;
 
         public Result(int promptTokens, int completionTokens, String text, JSONObject message, boolean structured,
-                      long ttftMs, long llmMs, JSONObject generation) {
+                      long ttftMs, long llmMs, JSONObject generation, String finishReason) {
             this.promptTokens = promptTokens;
             this.completionTokens = completionTokens;
             this.text = text;
@@ -63,6 +67,7 @@ public final class RuntimeManager {
             this.ttftMs = ttftMs;
             this.llmMs = llmMs;
             this.generation = generation;
+            this.finishReason = finishReason;
         }
     }
 
@@ -277,12 +282,19 @@ public final class RuntimeManager {
         inference.lock();
         final long startedAt = System.currentTimeMillis();
         final long[] firstTokenAt = {0};
-        final TokenConsumer timed = consumer == null ? null : token -> {
+        final TokenConsumer timed = token -> {
             if (firstTokenAt[0] == 0) {
                 firstTokenAt[0] = System.currentTimeMillis();
                 stage(stages, "首字到达");
             }
-            return consumer.onToken(token);
+            if (consumer == null) return true;
+            if (consumer instanceof EventConsumer) return consumer.onToken(token);
+            try {
+                String content = new JSONObject(token).optString("content", "");
+                return content.isEmpty() || consumer.onToken(content);
+            } catch (org.json.JSONException error) {
+                throw new IllegalStateException("核心增量事件不是有效 JSON", error);
+            }
         };
         final NativeRuntime.Progress2Consumer forwarding2 = progress2 == null ? null :
                 (phase, doneTokens, totalTokens, elapsedMs) ->
@@ -292,6 +304,7 @@ public final class RuntimeManager {
                     + (startedAt - queuedAt) + " requestedModel=" + requestedModel + " loadedModel=" + loadedModelId);
             if (!requestedModel.isEmpty() && (!requestedModel.equals(loadedModelId)
                     || state().phase == RuntimeState.Phase.ERROR)) {
+                findModel(requestedModel); // Unknown request IDs must not invalidate the loaded model.
                 loadModel(requestedModel);
             }
             if (loadedModelId == null) throw new IllegalStateException("尚未加载模型");
@@ -312,7 +325,7 @@ public final class RuntimeManager {
                     .put("loadRequest", loadedParameters)
                     .put("hot", hotParameters);
             stage(stages, "核心推理开始");
-            JSONObject response = new JSONObject(nativeRuntime.infer3(body.toString(), timed, forwarding2));
+            JSONObject response = new JSONObject(nativeRuntime.infer4(body.toString(), timed, forwarding2));
             stage(stages, "核心推理结束");
             setState(new RuntimeState(RuntimeState.Phase.MODEL_READY,
                     before.coreId, before.coreVersion, loadedModelId, null));
@@ -322,15 +335,24 @@ public final class RuntimeManager {
             events.info("runtime", "推理完成 kind=" + kind + " model=" + loadedModelId
                     + " promptTokens=" + response.optInt("promptTokens")
                     + " completionTokens=" + response.optInt("completionTokens")
-                    + " ttftMs=" + ttft + " llmMs=" + elapsed
+                    + " finishReason=" + response.getString("finishReason") + " ttftMs=" + ttft + " llmMs=" + elapsed
                     + " 请求=" + body + " 输出=" + response.optString("text"));
             return new Result(response.getInt("promptTokens"), response.getInt("completionTokens"),
                     response.getString("text"), response.optJSONObject("message"),
-                    response.optBoolean("structured"), ttft, elapsed, generation);
+                    response.optBoolean("structured"), ttft, elapsed, generation, response.getString("finishReason"));
         } catch (Exception error) {
             RuntimeState before = state();
-            setState(new RuntimeState(RuntimeState.Phase.ERROR, before.coreId, before.coreVersion,
-                    before.modelId, error.getMessage()));
+            boolean requestFailure = error instanceof IllegalArgumentException || error instanceof IOException
+                    || error instanceof java.util.concurrent.CancellationException;
+            if (requestFailure && loadedModelId != null && before.phase == RuntimeState.Phase.GENERATING) {
+                setState(new RuntimeState(RuntimeState.Phase.MODEL_READY, before.coreId, before.coreVersion,
+                        loadedModelId, null));
+            } else if (!requestFailure) {
+                setState(new RuntimeState(RuntimeState.Phase.ERROR, before.coreId, before.coreVersion,
+                        before.modelId, error.getMessage()));
+            }
+            events.info("runtime", requestId + " 请求结束 requestFailure=" + requestFailure
+                    + " modelState=" + state().phase + " errorClass=" + error.getClass().getName());
             events.error("runtime", "推理失败 kind=" + kind + " model=" + loadedModelId + " 请求=" + body, error);
             throw asRuntime(error);
         } finally {

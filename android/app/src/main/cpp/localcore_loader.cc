@@ -367,6 +367,54 @@ Java_com_localcore_runtime_NativeRuntime_nativeInfer3(
     }
 }
 
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_localcore_runtime_NativeRuntime_nativeInfer4(
+        JNIEnv * env, jclass, jlong handle, jstring request, jobject token_callback, jobject progress_callback) {
+    try {
+        Core * core = from(handle);
+        std::lock_guard<std::mutex> lock(core->operation);
+        std::string json = utf8(env, request);
+        CallbackState token_state{env, token_callback, nullptr};
+        if (token_callback != nullptr) {
+            jclass type = env->GetObjectClass(token_callback);
+            token_state.method = env->GetMethodID(type, "onToken", "(Ljava/lang/String;)Z");
+            env->DeleteLocalRef(type);
+            if (token_state.method == nullptr) throw std::runtime_error("TokenConsumer.onToken 方法不存在");
+        }
+        ProgressState2 progress_state{env, progress_callback, nullptr};
+        if (progress_callback != nullptr) {
+            jclass type = env->GetObjectClass(progress_callback);
+            progress_state.method = env->GetMethodID(type, "onProgress", "(Ljava/lang/String;IIJ)V");
+            env->DeleteLocalRef(type);
+            if (progress_state.method == nullptr) throw std::runtime_error("ProgressConsumer.onProgress 方法不存在");
+        }
+        char * result = nullptr;
+        char * error = nullptr;
+        auto infer4 = optional_symbol<infer3_fn>(core->library, "localcore_core_infer4");
+        if (infer4 == nullptr) throw std::runtime_error("Core update required: missing localcore_core_infer4");
+        int code = infer4(core->instance, json.c_str(),
+                token_callback == nullptr ? nullptr : emit_token, &token_state,
+                progress_callback == nullptr ? nullptr : emit_progress2, &progress_state,
+                &result, &error);
+        std::string output = take(core, result);
+        std::string detail = take(core, error);
+        // Always release ABI strings, including when the Java socket callback threw.
+        if (env->ExceptionCheck()) return nullptr;
+        if (code != 0) {
+            const char * type = code == 2 ? "java/lang/IllegalArgumentException"
+                    : code == 3 ? "java/util/concurrent/CancellationException" : "java/lang/IllegalStateException";
+            jclass exception = env->FindClass(type);
+            env->ThrowNew(exception, detail.c_str());
+            env->DeleteLocalRef(exception);
+            return nullptr;
+        }
+        return java_string(env, output.data(), output.size());
+    } catch (const std::exception & error) {
+        if (!env->ExceptionCheck()) throw_java(env, error.what());
+        return nullptr;
+    }
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_localcore_runtime_NativeRuntime_nativeUnloadModel(JNIEnv * env, jclass, jlong handle) {    try {
         Core * core = from(handle);

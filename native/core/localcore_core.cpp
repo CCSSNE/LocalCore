@@ -9,6 +9,8 @@
 #include "mtmd-helper.h"
 #include "mtmd.h"
 #include "sampling.h"
+#include "unicode.h"
+#include <chrono>
 
 #include <algorithm>
 #include <atomic>
@@ -313,49 +315,136 @@ common_params_sampling sampling_params(Engine & runtime, const common_json & req
     return params;
 }
 
-bool stopped(const std::string & text, const std::vector<std::string> & stops, size_t & stop_at) {
-    for (const std::string & stop : stops) {
-        if (stop.empty() || text.size() < stop.size()) continue;
-        if (text.compare(text.size() - stop.size(), stop.size(), stop) == 0) {
-            stop_at = text.size() - stop.size();
-            return true;
+struct RequestCancelled : std::runtime_error {
+    using std::runtime_error::runtime_error;
+};
+
+// One parser for partial events and the final message. No template parsing in the APK.
+struct OutputStream {
+    common_chat_parser_params parser;
+    common_chat_msg message;
+    std::vector<std::string> tool_ids;
+    localcore_token_callback callback;
+    void * user_data;
+    bool chat;
+    bool events;
+    size_t consumed = 0;
+
+    OutputStream(const common_chat_params * params, localcore_token_callback cb, void * data, bool json_events)
+        : callback(cb), user_data(data), chat(params != nullptr), events(json_events) {
+        if (params != nullptr) {
+            parser = common_chat_parser_params(*params);
+            if (!params->parser.empty()) parser.parser.load(params->parser);
         }
     }
-    return false;
+
+    void send(const std::string & value) {
+        if (callback != nullptr && !value.empty() && callback(value.data(), value.size(), user_data) == 0) {
+            throw RequestCancelled("Response consumer disconnected or cancelled");
+        }
+    }
+
+    void update(const std::string & text, bool partial) {
+        common_chat_msg next;
+        if (chat) {
+            next = common_chat_parse(text, partial, parser);
+            next.set_tool_call_ids(tool_ids, [] {
+                static std::atomic<uint64_t> serial{0};
+                return "call_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count())
+                        + "_" + std::to_string(serial.fetch_add(1));
+            });
+        } else {
+            next.content = text;
+        }
+        next.role = "assistant";
+        for (const auto & diff : common_chat_msg_diff::compute_diffs(message, next)) {
+            if (!events) {
+                send(diff.content_delta);
+                continue;
+            }
+            common_json delta = common_json::object();
+            if (!diff.content_delta.empty()) delta["content"] = diff.content_delta;
+            if (!diff.reasoning_content_delta.empty()) delta["reasoning_content"] = diff.reasoning_content_delta;
+            if (diff.tool_call_index != std::string::npos) {
+                size_t index = diff.tool_call_index;
+                const auto & tool = next.tool_calls.at(index);
+                common_json function = common_json::object();
+                size_t previous_name = index < message.tool_calls.size() ? message.tool_calls[index].name.size() : 0;
+                if (tool.name.size() > previous_name) function["name"] = tool.name.substr(previous_name);
+                if (!diff.tool_call_delta.arguments.empty()) function["arguments"] = diff.tool_call_delta.arguments;
+                common_json call = {{"index", index}, {"function", function}};
+                if (index >= message.tool_calls.size()) {
+                    call["id"] = tool.id;
+                    call["type"] = "function";
+                }
+                delta["tool_calls"] = common_json::array({call});
+            }
+            if (!delta.empty()) send(delta.dump());
+        }
+        message = std::move(next);
+        consumed = text.size();
+    }
+};
+
+// Hold only an unfinished UTF-8 codepoint and a possible stop-string prefix.
+size_t safe_output_end(const std::string & text, const std::vector<std::string> & stops, bool final) {
+    size_t end = text.size();
+    if (!final) {
+        for (const auto & stop : stops) {
+            for (size_t n = 1; n < stop.size() && n <= text.size(); ++n) {
+                if (text.compare(text.size() - n, n, stop, 0, n) == 0) end = std::min(end, text.size() - n);
+            }
+        }
+    }
+    size_t offset = 0;
+    std::string_view prefix(text.data(), end);
+    while (offset < end) {
+        auto codepoint = common_parse_utf8_codepoint(prefix, offset);
+        if (codepoint.status == utf8_parse_result::INVALID) throw std::runtime_error("Invalid UTF-8 in core output");
+        if (codepoint.status == utf8_parse_result::INCOMPLETE) {
+            if (final) throw std::runtime_error("Generation ended with an incomplete UTF-8 character");
+            return offset;
+        }
+        offset += codepoint.bytes_consumed;
+    }
+    return end;
 }
 
 std::string generate(Engine & runtime, common_params_sampling & params,
                      int32_t max_tokens, const std::vector<std::string> & stops,
-                     int & completion_tokens, localcore_token_callback callback,
-                     void * user_data, bool & streamed) {
+                     int & completion_tokens, OutputStream & stream, std::string & finish_reason) {
     owned<common_sampler, common_sampler_free> sampler(
             common_sampler_init(runtime.model, params), common_sampler_free);
-    if (!sampler) throw std::runtime_error("采样器初始化失败");
+    if (!sampler) throw std::runtime_error("Sampler initialization failed");
     const llama_vocab * vocab = llama_model_get_vocab(runtime.model);
     std::string output;
     completion_tokens = 0;
-    for (int32_t i = 0; i < max_tokens; i++) {
-        if (runtime.cancelled.load(std::memory_order_relaxed)) break;
+    finish_reason = "length";
+    for (int32_t i = 0; max_tokens < 0 || i < max_tokens; i++) {
+        if (runtime.cancelled.load(std::memory_order_relaxed)) throw RequestCancelled("Inference cancelled");
         llama_token token = common_sampler_sample(sampler.get(), runtime.context, -1);
         common_sampler_accept(sampler.get(), token, true);
-        if (llama_vocab_is_eog(vocab, token)) break;
-        std::string piece = common_token_to_piece(vocab, token, true);
-        output += piece;
+        if (llama_vocab_is_eog(vocab, token)) { finish_reason = "stop"; break; }
+        output += common_token_to_piece(vocab, token, true);
         completion_tokens++;
-        if (callback != nullptr && !piece.empty()) {
-            streamed = true;
-            if (callback(piece.data(), piece.size(), user_data) == 0) break;
+        size_t stop_at = std::string::npos;
+        for (const auto & stop : stops) {
+            if (!stop.empty()) stop_at = std::min(stop_at, output.find(stop));
         }
-        size_t stop_at = 0;
-        if (stopped(output, stops, stop_at)) {
+        if (stop_at != std::string::npos) {
             output.resize(stop_at);
+            finish_reason = "stop";
             break;
         }
+        size_t end = safe_output_end(output, stops, false);
+        if (end > stream.consumed) stream.update(output.substr(0, end), true);
+        if (max_tokens >= 0 && i + 1 == max_tokens) break;
         llama_batch batch = llama_batch_get_one(&token, 1);
-        if (llama_decode(runtime.context, batch) != 0) {
-            throw std::runtime_error("llama_decode 生成 token 失败");
-        }
+        if (llama_decode(runtime.context, batch) != 0) throw std::runtime_error("llama_decode failed during generation");
     }
+    safe_output_end(output, stops, true);
+    stream.update(output, false);
+    if (finish_reason == "stop" && !stream.message.tool_calls.empty()) finish_reason = "tool_calls";
     return output;
 }
 
@@ -503,7 +592,7 @@ extern "C" LOCALCORE_EXPORT int localcore_core_unload_model(void * instance, cha
 static int infer_impl(void * instance, const char * request_json, localcore_token_callback token_callback,
         void * token_user_data, localcore_progress_callback progress_callback,
         void * progress_user_data, localcore_progress_callback2 progress_callback2,
-        void * progress_user_data2, char ** result_json, char ** error);
+        void * progress_user_data2, char ** result_json, char ** error, bool json_events = false);
 
 extern "C" LOCALCORE_EXPORT int localcore_core_infer(
         void * instance, const char * request_json, localcore_token_callback callback,
@@ -528,10 +617,19 @@ extern "C" LOCALCORE_EXPORT int localcore_core_infer3(
             nullptr, nullptr, progress_callback, progress_user_data, result_json, error);
 }
 
+extern "C" LOCALCORE_EXPORT int localcore_core_infer4(
+        void * instance, const char * request_json, localcore_token_callback event_callback,
+        void * event_user_data, localcore_progress_callback2 progress_callback,
+        void * progress_user_data, char ** result_json, char ** error) {
+    return infer_impl(instance, request_json, event_callback, event_user_data,
+            nullptr, nullptr, progress_callback, progress_user_data, result_json, error, true);
+}
+
 static int infer_impl(void * instance, const char * request_json, localcore_token_callback token_callback,
         void * token_user_data, localcore_progress_callback progress_callback,
         void * progress_user_data, localcore_progress_callback2 progress_callback2,
-        void * progress_user_data2, char ** result_json, char ** error) {
+        void * progress_user_data2, char ** result_json, char ** error, bool json_events) {
+    bool computing = false;
     try {
         Engine & runtime = engine(instance);
         std::lock_guard<std::mutex> lock(runtime.operation);
@@ -553,6 +651,12 @@ static int infer_impl(void * instance, const char * request_json, localcore_toke
             throw std::invalid_argument("未知推理类型: " + kind);
         }
         std::vector<std::string> media_paths = string_array(request, "mediaPaths");
+        common_params_sampling params = sampling_params(runtime, request, chat_pointer);
+        int32_t max_tokens = int_value(request, "max_tokens", 1024);
+        auto stops = string_array(request, "stop");
+        OutputStream stream(chat_pointer, token_callback, token_user_data, json_events);
+        stream.parser.reasoning_format = common_reasoning_format_from_name(string_value(request, "reasoning_format", "none"));
+        computing = true;
         runtime.progress.start(progress_callback, progress_user_data, progress_callback2, progress_user_data2);
         struct ProgressScope {
             PrefillProgress & progress;
@@ -563,36 +667,25 @@ static int infer_impl(void * instance, const char * request_json, localcore_toke
                 : evaluate_media(runtime, prompt, media_paths);
         runtime.progress.verify_complete();
         runtime.progress.stop();
-        common_params_sampling params = sampling_params(runtime, request, chat_pointer);
         int completion_tokens = 0;
-        bool streamed = false;
-        std::string text = generate(runtime, params,
-                int_value(request, "max_tokens", 1024), string_array(request, "stop"), completion_tokens,
-                token_callback, token_user_data, streamed);
-        common_chat_msg message;
-        common_chat_msg * message_pointer = nullptr;
-        if (chat_pointer != nullptr) {
-            common_chat_parser_params parser(*chat_pointer);
-            if (!chat_pointer->parser.empty()) {
-                parser.parser.load(chat_pointer->parser);
-            }
-            parser.reasoning_format = common_reasoning_format_from_name(
-                    string_value(request, "reasoning_format", "none"));
-            message = common_chat_parse(text, false, parser);
-            message_pointer = &message;
-        }
-        const std::string & callback_text = message_pointer == nullptr ? text : message_pointer->content;
-        // 已逐 token 推送过的不再补一次全文；老核心行为（单次全量回调）保持不变。
-        if (!streamed && token_callback != nullptr && !callback_text.empty()
-                && token_callback(callback_text.data(), callback_text.size(), token_user_data) == 0) {
-            throw std::runtime_error("响应消费者拒绝生成文本");
-        }
-        set_string(result_json, make_result(prompt_tokens, completion_tokens, text, message_pointer).dump());
+        std::string finish_reason;
+        std::string text = generate(runtime, params, max_tokens, stops, completion_tokens, stream, finish_reason);
+        auto result = make_result(prompt_tokens, completion_tokens, text, chat_pointer == nullptr ? nullptr : &stream.message);
+        result["finishReason"] = finish_reason;
+        std::fprintf(stderr, "LocalCore request=%s finish=%s promptTokens=%d completionTokens=%d\n",
+                string_value(request, "_requestId", "local").c_str(), finish_reason.c_str(), prompt_tokens, completion_tokens);
+        set_string(result_json, result.dump());
         if (error != nullptr) *error = nullptr;
         return 0;
     } catch (const std::exception & failure) {
         set_string(error, failure.what());
-        return 1;
+        bool cancelled = dynamic_cast<const RequestCancelled *>(&failure) != nullptr
+                || (instance != nullptr && static_cast<Engine *>(instance)->cancelled.load());
+        bool invalid = !computing || dynamic_cast<const std::invalid_argument *>(&failure) != nullptr
+                || dynamic_cast<const common_json::exception *>(&failure) != nullptr;
+        int code = cancelled ? 3 : invalid ? 2 : 1;
+        std::fprintf(stderr, "LocalCore infer failure code=%d computing=%d error=%s\n", code, computing, failure.what());
+        return code;
     }
 }
 
