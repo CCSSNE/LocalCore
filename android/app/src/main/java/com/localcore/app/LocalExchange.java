@@ -393,6 +393,44 @@ public final class LocalExchange {
         events.info("resource", "模型参数已更新 " + modelId + "，加载项下次加载生效");
     }
 
+    public String serverSettings() throws Exception {
+        JSONObject server = config.current().optJSONObject("server");
+        if (server == null) server = new JSONObject();
+        JSONObject result = new JSONObject();
+        result.put("host", server.optString("host", "127.0.0.1"));
+        result.put("port", server.optInt("port", 11434));
+        result.put("apiKey", server.optString("apiKey", ""));
+        return result.toString();
+    }
+
+    public String setServerSettings(String text) throws Exception {
+        JSONObject request;
+        try {
+            request = new JSONObject(text == null ? "{}" : text);
+        } catch (JSONException error) {
+            throw new IllegalArgumentException("服务设置不是合法 JSON: " + error.getMessage());
+        }
+        String host = request.optString("host", "127.0.0.1");
+        if (host.isEmpty()) throw new IllegalArgumentException("host 不能为空");
+        int port = request.optInt("port", 11434);
+        if (port < 1 || port > 65535) throw new IllegalArgumentException("port 必须是 1-65535");
+        String apiKey = request.optString("apiKey", "");
+        if (request.has("apiKey") && !(request.opt("apiKey") instanceof String)) {
+            throw new IllegalArgumentException("apiKey 必须是字符串，留空表示免鉴权");
+        }
+        JSONObject next = config.current();
+        JSONObject server = next.optJSONObject("server");
+        if (server == null) server = new JSONObject();
+        server.put("host", host);
+        server.put("port", port);
+        server.put("apiKey", apiKey == null ? "" : apiKey);
+        next.put("server", server);
+        config.activate(next.toString());
+        events.info("service", "后端服务设置已更新 host=" + host + " port=" + port
+                + " apiKey=" + (apiKey == null || apiKey.isEmpty() ? "未设置(免鉴权)" : "已设置(长度" + apiKey.length() + ")"));
+        return serverSettings();
+    }
+
     public String hotSettings() {
         return HotSettings.fromConfig(config.current()).toString();
     }
