@@ -347,6 +347,7 @@ public final class RuntimeManager {
     }
 
     private void setState(RuntimeState next) {
+        synchronized (this) {
             state = next;
         }
         for (Listener listener : listeners) listener.onRuntimeState(next);
