@@ -204,11 +204,15 @@ public final class BackendService extends Service {
             long t0 = SystemClock.uptimeMillis();
             AppGraph current = graph;
             LocalHttpServer active = server;
-            if (current == null || active == null) {
+            if (!requested || current == null || active == null) {
                 Log.i(TAG, "onConfigChanged skipped(graph/server未就绪)");
                 return;
             }
             try {
+                if (active.matchesListener(current.config.current().optJSONObject("server"))) {
+                    current.events.info("service", "配置已生效，监听地址未变，保留 HTTP 监听");
+                    return;
+                }
                 current.events.info("service", "配置变更: 重新监听开始");
                 active.stop();
                 long s0 = SystemClock.uptimeMillis();

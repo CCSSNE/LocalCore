@@ -34,6 +34,8 @@ public final class LocalHttpServer {
     private ServerSocket socket;
     private Thread acceptThread;
     private String address;
+    private String boundHost;
+    private int boundPort;
 
     public LocalHttpServer(ConfigRepository config, ResourceManager resources,
                            RuntimeManager runtime, EventLog events) {
@@ -65,6 +67,8 @@ public final class LocalHttpServer {
         candidate.bind(new InetSocketAddress(resolved, port));
         long bindMs = System.currentTimeMillis() - bind0;
         socket = candidate;
+        boundHost = host;
+        boundPort = port;
         address = "http://" + host + ":" + port;
         acceptThread = new Thread(this::acceptLoop, "localcore-http-accept");
         acceptThread.start();
@@ -96,6 +100,11 @@ public final class LocalHttpServer {
 
     public synchronized String address() {
         return address;
+    }
+
+    public synchronized boolean matchesListener(JSONObject server) {
+        return socket != null && server != null && server.optString("host").equals(boundHost)
+                && server.optInt("port") == boundPort;
     }
 
     private void acceptLoop() {

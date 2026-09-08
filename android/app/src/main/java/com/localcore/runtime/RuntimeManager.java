@@ -85,6 +85,7 @@ public final class RuntimeManager {
     private String loadedModelName;
     private JSONObject loadedParameters;
     private JSONObject loadedColdConfig;
+    private String loadedConfigIdentity;
 
     public RuntimeManager(Context context, ConfigRepository config, ResourceManager resources, EventLog events) {
         this.context = context;
@@ -137,6 +138,7 @@ public final class RuntimeManager {
             loadedModelId = modelId;
             loadedModelName = model.optString("name");
             loadedColdConfig = new JSONObject(load.toString());
+            loadedConfigIdentity = modelConfigIdentity(model);
             loadedParameters = new JSONObject(request.toString());
             loadedParameters.remove("modelPath");
             loadedParameters.remove("mmprojPath");
@@ -302,10 +304,14 @@ public final class RuntimeManager {
         try {
             events.info("runtime", requestId + " 获得调度锁 queueMs="
                     + (startedAt - queuedAt) + " requestedModel=" + requestedModel + " loadedModel=" + loadedModelId);
-            if (!requestedModel.isEmpty() && (!requestedModel.equals(loadedModelId)
-                    || state().phase == RuntimeState.Phase.ERROR)) {
-                findModel(requestedModel); // Unknown request IDs must not invalidate the loaded model.
-                loadModel(requestedModel);
+            String targetModel = requestedModel.isEmpty() ? loadedModelId : requestedModel;
+            if (targetModel != null) {
+                JSONObject targetConfig = findModel(targetModel);
+                boolean configChanged = !modelConfigIdentity(targetConfig).equals(loadedConfigIdentity);
+                if (!targetModel.equals(loadedModelId) || state().phase == RuntimeState.Phase.ERROR || configChanged) {
+                    events.info("runtime", requestId + " 加载目标模型=" + targetModel + " configChanged=" + configChanged);
+                    loadModel(targetModel);
+                }
             }
             if (loadedModelId == null) throw new IllegalStateException("尚未加载模型");
             events.info("runtime", requestId + " 执行模型=" + loadedModelId);
@@ -402,6 +408,14 @@ public final class RuntimeManager {
             if (id.equals(model.optString("id"))) return model;
         }
         throw new IllegalArgumentException("配置中不存在模型: " + id);
+    }
+
+    private static String modelConfigIdentity(JSONObject model) throws org.json.JSONException {
+        JSONObject identity = new JSONObject();
+        for (String key : new String[]{"id", "resource", "core", "mmproj", "load", "template"}) {
+            if (model.has(key)) identity.put(key, model.get(key));
+        }
+        return identity.toString();
     }
 
     private JSONObject findResource(String id) {
