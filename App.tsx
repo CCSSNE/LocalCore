@@ -1537,9 +1537,8 @@ export default function App() {
         <Pressable style={styles.tplMask} onPress={closeModelSettings}>
           <Pressable style={styles.tplCard} onPress={e => e.stopPropagation()}>
             <Text style={styles.settingsTitle} numberOfLines={1}>
-              设置{tplModel ? ' - ' + tplModel.name : ''}
+              {tplModel ? tplModel.name : ''}
             </Text>
-            <Text style={styles.hint}>加载项下次加载生效</Text>
             {tplLoading ? (
               <View style={styles.centerBox}>
                 <ActivityIndicator />
