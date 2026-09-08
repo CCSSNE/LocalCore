@@ -344,6 +344,8 @@ export default function App() {
   const [backendInfo, setBackendInfo] = useState<{running: boolean; address: string | null; error: string | null} | null>(null);
   const [backendError, setBackendError] = useState<string | null>(null);
   const [backendLoading, setBackendLoading] = useState(false);
+  const [serverForm, setServerForm] = useState({host: '127.0.0.1', port: '11434', apiKey: ''});
+  const [serverOrig, setServerOrig] = useState({host: '127.0.0.1', port: '11434', apiKey: ''});
   const chatScroll = useRef<ScrollView | null>(null);
   const logScroll = useRef<ScrollView | null>(null);
   const chatScrollSig = useRef<string>('');
@@ -665,6 +667,15 @@ export default function App() {
         address: b.address == null ? null : String(b.address),
         error: b.error == null ? null : String(b.error),
       });
+      const serverText = String(await Backend.getServerSettings());
+      const server = JSON.parse(serverText);
+      const form = {
+        host: String(server?.host ?? '127.0.0.1'),
+        port: String(server?.port ?? '11434'),
+        apiKey: String(server?.apiKey ?? ''),
+      };
+      setServerForm(form);
+      setServerOrig(form);
       setBackendError(null);
     } catch (error: any) {
       const message = error?.message ?? String(error);
@@ -673,6 +684,28 @@ export default function App() {
     } finally {
       setBackendLoading(false);
     }
+  };
+
+  const saveServerSettings = () => {
+    const port = Number(serverForm.port);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      push('fail', 'FAIL 保存后端设置 => 端口必须是 1-65535 的整数');
+      return;
+    }
+    if (!serverForm.host.trim()) {
+      push('fail', 'FAIL 保存后端设置 => 监听地址不能为空');
+      return;
+    }
+    run(
+      '保存后端设置',
+      () =>
+        Backend.setServerSettings(
+          JSON.stringify({host: serverForm.host.trim(), port, apiKey: serverForm.apiKey}),
+        ),
+      () => {
+        fetchBackend();
+      },
+    );
   };
 
   useEffect(() => {
@@ -1642,6 +1675,51 @@ export default function App() {
             <Text style={styles.cardSub} selectable>错误：{backendInfo.error ?? '无'}</Text>
           </View>
         ) : null}
+        <View style={styles.card}>
+          <View style={styles.cardTitleRow}>
+            <Text style={styles.cardTitle}>服务设置</Text>
+          </View>
+          <Text style={styles.hint}>监听地址</Text>
+          <TextInput
+            value={serverForm.host}
+            onChangeText={v => setServerForm(prev => ({...prev, host: v}))}
+            autoCapitalize="none"
+            autoCorrect={false}
+            placeholderTextColor="#999999"
+            style={styles.settingsInput}
+          />
+          <Text style={styles.hint}>端口（1-65535）</Text>
+          <TextInput
+            value={serverForm.port}
+            onChangeText={v => setServerForm(prev => ({...prev, port: v}))}
+            keyboardType="numeric"
+            placeholderTextColor="#999999"
+            style={styles.settingsInput}
+          />
+          <Text style={styles.hint}>Bearer API Key（留空表示免鉴权）</Text>
+          <TextInput
+            value={serverForm.apiKey}
+            onChangeText={v => setServerForm(prev => ({...prev, apiKey: v}))}
+            autoCapitalize="none"
+            autoCorrect={false}
+            secureTextEntry={false}
+            placeholder="留空则无需 Authorization 头"
+            placeholderTextColor="#999999"
+            style={styles.settingsInput}
+          />
+          <Text style={styles.hint}>
+            已配置：{serverOrig.apiKey ? `已设置（长度${serverOrig.apiKey.length}）` : '未设置（免鉴权）'}
+            {'\n'}调用时请求头 Authorization: Bearer {'<key>'}
+          </Text>
+          <View style={styles.rowBtns}>
+            <TouchableOpacity
+              style={[styles.btn, styles.btnFlex, styles.btnLast]}
+              disabled={!!busy}
+              onPress={saveServerSettings}>
+              <Text>保存服务设置</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
       </ScrollView>
     </View>
   );

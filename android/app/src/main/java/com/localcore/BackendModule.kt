@@ -663,6 +663,20 @@ class BackendModule(private val reactContext: ReactApplicationContext) :
   }
 
   @ReactMethod
+  fun getServerSettings(promise: Promise) {
+    runAsync(promise, "SERVER_SETTINGS_FAILED") {
+      application.graph.exchange.serverSettings()
+    }
+  }
+
+  @ReactMethod
+  fun setServerSettings(settingsJson: String, promise: Promise) {
+    runAsync(promise, "SERVER_SETTINGS_FAILED") {
+      application.graph.exchange.setServerSettings(settingsJson)
+    }
+  }
+
+  @ReactMethod
   fun checkCoreUpdate(promise: Promise) {
     try {
       application.graph.updates.checkNow()
