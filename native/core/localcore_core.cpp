@@ -9,7 +9,7 @@
 #include "mtmd-helper.h"
 #include "mtmd.h"
 #include "sampling.h"
-#include "unicode.h"
+#include "common/unicode.h"
 #include <chrono>
 
 #include <algorithm>

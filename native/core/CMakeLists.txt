@@ -27,6 +27,7 @@ target_compile_features(localcore_core PRIVATE cxx_std_17)
 target_compile_options(localcore_core PRIVATE -Wall -Wextra -fvisibility=hidden)
 target_include_directories(localcore_core PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../include
+    ${LLAMA_CPP_DIR}
     ${LLAMA_CPP_DIR}/include
     ${LLAMA_CPP_DIR}/src
     ${LLAMA_CPP_DIR}/common
