@@ -630,12 +630,14 @@ static int infer_impl(void * instance, const char * request_json, localcore_toke
         void * progress_user_data, localcore_progress_callback2 progress_callback2,
         void * progress_user_data2, char ** result_json, char ** error, bool json_events) {
     bool computing = false;
+    bool model_ready = false;
     try {
         Engine & runtime = engine(instance);
         std::lock_guard<std::mutex> lock(runtime.operation);
         if (runtime.model == nullptr || runtime.context == nullptr) throw std::runtime_error("尚未加载模型");
-        common_json request = common_json::parse(request_json == nullptr ? "" : request_json);
+        model_ready = true;
         runtime.cancelled.store(false, std::memory_order_relaxed);
+        common_json request = common_json::parse(request_json == nullptr ? "" : request_json);
         llama_memory_clear(llama_get_memory(runtime.context), true);
         std::string kind = string_value(request, "type");
         common_chat_params chat;
@@ -681,8 +683,7 @@ static int infer_impl(void * instance, const char * request_json, localcore_toke
         set_string(error, failure.what());
         bool cancelled = dynamic_cast<const RequestCancelled *>(&failure) != nullptr
                 || (instance != nullptr && static_cast<Engine *>(instance)->cancelled.load());
-        bool invalid = !computing || dynamic_cast<const std::invalid_argument *>(&failure) != nullptr
-                || dynamic_cast<const common_json::exception *>(&failure) != nullptr;
+        bool invalid = model_ready && !computing;
         int code = cancelled ? 3 : invalid ? 2 : 1;
         std::fprintf(stderr, "LocalCore infer failure code=%d computing=%d error=%s\n", code, computing, failure.what());
         return code;

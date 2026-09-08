@@ -265,7 +265,10 @@ public final class RuntimeManager {
     }
 
     public synchronized void cancel() {
-        if (activeInferenceThread != null) nativeRuntime.cancel();
+        if (activeInferenceThread != null) {
+            activeInferenceThread.interrupt();
+            nativeRuntime.cancel();
+        }
     }
 
     public synchronized void cancel(Thread owner) {
