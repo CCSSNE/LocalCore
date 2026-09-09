@@ -1976,7 +1976,6 @@ export default function App() {
               ? <ModelDownloadScreen />
               : route === 'systemPrompt'
                 ? <ScrollView style={styles.screen} contentContainerStyle={styles.screenContent} keyboardShouldPersistTaps="handled">
-                    <Text style={styles.hint}>全局默认系统提示词，输入后自动保存，后续请求生效。API 自带系统消息时优先使用 API 内容；留空则不添加默认提示词。</Text>
                     <TextInput
                       value={systemPrompt}
                       editable={settingsLoaded}
@@ -2270,7 +2269,7 @@ const styles = StyleSheet.create({
     textAlignVertical: 'center',
     includeFontPadding: false,
   },
-  systemPromptInput: {minHeight: 220, maxHeight: 480},
+  systemPromptInput: {minHeight: 220, maxHeight: 480, textAlignVertical: 'top', textAlign: 'left'},
   extraHotInput: {
     flex: 1,
     borderWidth: 1,
