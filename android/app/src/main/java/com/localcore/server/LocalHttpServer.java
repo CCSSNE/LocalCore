@@ -95,7 +95,6 @@ public final class LocalHttpServer {
         for (java.util.Map.Entry<Socket, Thread> client : clients.entrySet()) {
             Thread worker = client.getValue();
             if (worker != null) {
-                worker.interrupt();
                 runtime.cancel(worker);
             }
             try { client.getKey().close(); }
@@ -168,7 +167,8 @@ public final class LocalHttpServer {
         String peer = String.valueOf(connection.getRemoteSocketAddress());
         try (Socket closeable = connection;
              BufferedInputStream input = new BufferedInputStream(closeable.getInputStream());
-             BufferedOutputStream rawOutput = new BufferedOutputStream(closeable.getOutputStream())) {
+             BufferedOutputStream rawOutput = new BufferedOutputStream(closeable.getOutputStream());
+             DisconnectWatch disconnect = new DisconnectWatch(closeable, input)) {
             closeable.setTcpNoDelay(true);
             HttpOutput output = new HttpOutput(rawOutput);
             String requestId = "req-" + UUID.randomUUID().toString().substring(0, 8);
@@ -177,6 +177,7 @@ public final class LocalHttpServer {
             try {
                 request = HttpRequest.read(input);
                 if (request == null) return;
+                disconnect.start(requestId);
                 // 全量请求日志：方法 + 完整目标（含查询串）+ 对端 + 全量头（鉴权头脱敏）+ 全量体。
                 // 不截断：自用开发版，完整请求必须落盘，便于与前端日志逐字对照。
                 events.info("request", "--> " + requestId + " " + request.method + " " + request.target
@@ -207,6 +208,50 @@ public final class LocalHttpServer {
 
         } catch (IOException error) {
             events.error("request", "连接读写失败 " + peer, error);
+        }
+    }
+
+    // This server handles one request per connection (Connection: close). Once
+    // its body is complete, the reader belongs exclusively to the EOF watcher.
+    private final class DisconnectWatch implements AutoCloseable {
+        private final Socket connection;
+        private final BufferedInputStream input;
+        private final Thread owner = Thread.currentThread();
+        private boolean finished;
+
+        DisconnectWatch(Socket connection, BufferedInputStream input) {
+            this.connection = connection;
+            this.input = input;
+        }
+
+        void start(String requestId) {
+            Thread watcher = new Thread(() -> {
+                String reason = "peer EOF";
+                try {
+                    byte[] buffer = new byte[8192];
+                    while (input.read(buffer) != -1) {
+                        // Pipelined bytes cannot start another request on this connection.
+                    }
+                } catch (IOException error) {
+                    reason = error.toString();
+                }
+                synchronized (this) {
+                    if (finished) return;
+                    events.info("request", requestId + " 对端断连，取消所属请求 reason=" + reason);
+                    runtime.cancel(owner);
+                    try { connection.close(); }
+                    catch (IOException error) { events.error("request", "断连后关闭连接失败", error); }
+                }
+            }, "localcore-disconnect-" + requestId);
+            watcher.setDaemon(true);
+            watcher.start();
+        }
+
+        @Override
+        public synchronized void close() throws IOException {
+            // Serialize retirement with cancellation before the pool reuses owner.
+            finished = true;
+            connection.close();
         }
     }
 

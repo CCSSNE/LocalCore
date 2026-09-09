@@ -40,10 +40,10 @@ public:
 
         static bool eval(ggml_tensor * tensor, bool ask, void * opaque) {
             auto & self = *static_cast<Graph *>(opaque);
-            if (!self.owner.active) return ask ? false : true;
             const auto found = self.checkpoints.find(tensor);
             if (ask) return found != self.checkpoints.end();
             self.owner.check_cancelled();
+            if (!self.owner.active) return true;
             if (found == self.checkpoints.end() || found->second <= self.done) {
                 throw std::runtime_error("进度回调节点顺序异常");
             }
@@ -60,14 +60,13 @@ public:
 
         void prepare(ggml_cgraph * graph, int64_t work_tokens) {
             checkpoints.clear();
-            if (!owner.active) return;
             owner.check_cancelled();
-            verify();
+            if (owner.active) verify();
             // The next LLM graph follows successful visual encoding and output copy.
-            if (!vision && owner.image_chunk) owner.finish(owner.image);
-            phase = vision ? &owner.image : owner.image_chunk ? &owner.image_context : &owner.context;
+            if (owner.active && !vision && owner.image_chunk) owner.finish(owner.image);
+            phase = owner.active ? (vision ? &owner.image : owner.image_chunk ? &owner.image_context : &owner.context) : nullptr;
             tokens = vision ? owner.chunk_tokens : work_tokens;
-            if (tokens <= 0 || phase->completed + tokens > phase->total) {
+            if (owner.active && (tokens <= 0 || phase->completed + tokens > phase->total)) {
                 throw std::runtime_error("计算图 token 数与本次进度总量不一致");
             }
             std::vector<ggml_tensor *> compute_nodes;
@@ -87,7 +86,7 @@ public:
             const int stride = std::max(1, (nodes + 99) / 100);
             for (int i = stride; i < nodes; i += stride) checkpoints.emplace(compute_nodes[i - 1], i);
             checkpoints.emplace(compute_nodes.back(), nodes);
-            owner.publish(*phase, phase->completed);
+            if (owner.active) owner.publish(*phase, phase->completed);
         }
     };
 
@@ -133,8 +132,10 @@ public:
     }
 
     void preparing(const char * phase) {
+        check_cancelled();
         if (active && callback != nullptr) callback(phase, 0, 0, user_data);
         if (active && callback2 != nullptr) callback2(phase, 0, 0, 0, user_data2);
+        check_cancelled();
     }
 
     void select_chunk(bool is_image, int64_t tokens) {
@@ -161,6 +162,10 @@ public:
 
     void check_cancelled() const {
         if (cancelled.load(std::memory_order_relaxed)) throw std::runtime_error("推理已取消");
+    }
+
+    static bool should_abort(void * opaque) {
+        return static_cast<PrefillProgress *>(opaque)->cancelled.load(std::memory_order_relaxed);
     }
 
 private:

@@ -272,6 +272,7 @@ public final class RuntimeManager {
     }
 
     public synchronized void cancel(Thread owner) {
+        owner.interrupt();
         if (activeInferenceThread == owner) {
             events.info("runtime", "取消所属 HTTP 请求 thread=" + owner.getName());
             nativeRuntime.cancel();
@@ -321,6 +322,7 @@ public final class RuntimeManager {
             if (progress2 != null) progress2.onProgress(phase, doneTokens, totalTokens, elapsedMs);
         };
         try {
+            checkRequestInterrupted();
             events.info("runtime", requestId + " 获得调度锁 queueMs="
                     + (startedAt - queuedAt) + " requestedModel=" + requestedModel + " loadedModel=" + loadedModelId);
             String targetModel = requestedModel.isEmpty() ? loadedModelId : requestedModel;
@@ -330,6 +332,7 @@ public final class RuntimeManager {
                 if (!targetModel.equals(loadedModelId) || state().phase == RuntimeState.Phase.ERROR || configChanged) {
                     events.info("runtime", requestId + " 加载目标模型=" + targetModel + " configChanged=" + configChanged);
                     loadModel(targetModel);
+                    checkRequestInterrupted();
                 }
             }
             if (loadedModelId == null) throw new IllegalStateException("尚未加载模型");
@@ -396,10 +399,11 @@ public final class RuntimeManager {
     }
 
     private static void stage(StageListener stages, String text) {
+        checkRequestInterrupted();
         if (stages != null) stages.onStage(text);
     }
 
-    private static void checkRequestInterrupted() {
+    static void checkRequestInterrupted() {
         if (Thread.currentThread().isInterrupted()) {
             throw new java.util.concurrent.CancellationException("所属请求已停止");
         }

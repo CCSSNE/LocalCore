@@ -52,13 +52,16 @@ final class MediaResolver {
         JSONArray messages;
         JSONArray paths = new JSONArray();
         try {
+            RuntimeManager.checkRequestInterrupted();
             messages = new JSONArray(input.toString());
             for (int i = 0; i < messages.length(); i++) {
+                RuntimeManager.checkRequestInterrupted();
                 JSONObject message = messages.getJSONObject(i);
                 Object content = message.opt("content");
                 if (!(content instanceof JSONArray)) continue;
                 JSONArray parts = (JSONArray) content;
                 for (int j = 0; j < parts.length(); j++) {
+                    RuntimeManager.checkRequestInterrupted();
                     JSONObject part = parts.getJSONObject(j);
                     if (!"image_url".equals(part.optString("type"))) continue;
                     Object image = part.get("image_url");
@@ -71,9 +74,11 @@ final class MediaResolver {
                 }
             }
             applyBudget(paths);
+            RuntimeManager.checkRequestInterrupted();
             return new Prepared(messages, paths);
         } catch (Exception error) {
             for (int i = 0; i < paths.length(); i++) new File(paths.optString(i)).delete();
+            RuntimeManager.checkRequestInterrupted();
             if (error instanceof IOException) throw (IOException) error;
             throw new IOException("解析多模态请求失败: " + error.getMessage(), error);
         }
@@ -87,6 +92,7 @@ final class MediaResolver {
         int[] widths = new int[paths.length()];
         int[] heights = new int[paths.length()];
         for (int i = 0; i < paths.length(); i++) {
+            RuntimeManager.checkRequestInterrupted();
             int[] size = probe(new File(paths.optString(i)));
             widths[i] = size[0];
             heights[i] = size[1];
@@ -95,6 +101,7 @@ final class MediaResolver {
         if (total <= budget) return;
         double scale = Math.sqrt(budget / (double) total);
         for (int i = 0; i < paths.length(); i++) {
+            RuntimeManager.checkRequestInterrupted();
             if (widths[i] <= 0 || heights[i] <= 0) continue;
             int targetWidth = Math.max(1, (int) (widths[i] * scale));
             int targetHeight = Math.max(1, (int) (heights[i] * scale));
@@ -151,10 +158,15 @@ final class MediaResolver {
     }
 
     private static void write(String address, File target) throws IOException {
+        RuntimeManager.checkRequestInterrupted();
         try (InputStream input = open(address); FileOutputStream output = new FileOutputStream(target)) {
             byte[] buffer = new byte[128 * 1024];
             int count;
-            while ((count = input.read(buffer)) != -1) output.write(buffer, 0, count);
+            while ((count = input.read(buffer)) != -1) {
+                RuntimeManager.checkRequestInterrupted();
+                output.write(buffer, 0, count);
+            }
+            RuntimeManager.checkRequestInterrupted();
             output.getFD().sync();
         }
     }

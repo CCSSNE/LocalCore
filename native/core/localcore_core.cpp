@@ -138,6 +138,8 @@ llama_context_params context_parameters(const common_json & request, PrefillProg
     params.cb_eval_graph = PrefillProgress::Graph::begin;
     params.cb_eval = PrefillProgress::Graph::eval;
     params.cb_eval_user_data = &progress.llm;
+    params.abort_callback = PrefillProgress::should_abort;
+    params.abort_callback_data = &progress;
     return params;
 }
 
@@ -195,6 +197,7 @@ int evaluate_media(Engine & runtime, const std::string & prompt, const std::vect
     mtmd_helper_init_opt options = mtmd_helper_init_opt_default();
     try {
         for (const std::string & path : paths) {
+            runtime.progress.check_cancelled();
             mtmd_helper_bitmap_wrapper media = mtmd_helper_bitmap_init_from_file(
                     runtime.vision, path.c_str(), false, options);
             if (media.bitmap == nullptr) throw std::runtime_error("MTMD 无法解码图片: " + path);
@@ -443,6 +446,7 @@ std::string generate(Engine & runtime, common_params_sampling & params,
         if (llama_decode(runtime.context, batch) != 0) throw std::runtime_error("llama_decode failed during generation");
     }
     safe_output_end(output, stops, true);
+    runtime.progress.check_cancelled();
     stream.update(output, false);
     if (finish_reason == "stop" && !stream.message.tool_calls.empty()) finish_reason = "tool_calls";
     return output;
@@ -489,6 +493,7 @@ extern "C" LOCALCORE_EXPORT int localcore_core_load_model(
     try {
         Engine & runtime = engine(instance);
         std::lock_guard<std::mutex> lock(runtime.operation);
+        runtime.cancelled.store(false, std::memory_order_relaxed);
         common_json request = common_json::parse(request_json == nullptr ? "" : request_json);
         runtime.unload();
         llama_model_params model_params = llama_model_default_params();
@@ -508,7 +513,6 @@ extern "C" LOCALCORE_EXPORT int localcore_core_load_model(
         }
         runtime.templates = common_chat_templates_init(
                 runtime.model, string_value(request, "chatTemplate"));
-        runtime.cancelled.store(false, std::memory_order_relaxed);
         common_json result = common_json::object({
                 {"version", localcore_core_version()},
                 {"abi", LOCALCORE_CORE_ABI_VERSION},
@@ -637,6 +641,14 @@ static int infer_impl(void * instance, const char * request_json, localcore_toke
         if (runtime.model == nullptr || runtime.context == nullptr) throw std::runtime_error("尚未加载模型");
         model_ready = true;
         runtime.cancelled.store(false, std::memory_order_relaxed);
+        runtime.progress.start(progress_callback, progress_user_data, progress_callback2, progress_user_data2);
+        struct ProgressScope {
+            PrefillProgress & progress;
+            ~ProgressScope() { progress.stop(); }
+        } progress_scope{runtime.progress};
+        // Reconcile a Java interrupt that raced with the per-request reset before
+        // parsing templates or starting any compute, even if no token is emitted.
+        runtime.progress.preparing("request_prepare");
         common_json request = common_json::parse(request_json == nullptr ? "" : request_json);
         llama_memory_clear(llama_get_memory(runtime.context), true);
         std::string kind = string_value(request, "type");
@@ -659,11 +671,6 @@ static int infer_impl(void * instance, const char * request_json, localcore_toke
         OutputStream stream(chat_pointer, token_callback, token_user_data, json_events);
         stream.parser.reasoning_format = common_reasoning_format_from_name(string_value(request, "reasoning_format", "none"));
         computing = true;
-        runtime.progress.start(progress_callback, progress_user_data, progress_callback2, progress_user_data2);
-        struct ProgressScope {
-            PrefillProgress & progress;
-            ~ProgressScope() { progress.stop(); }
-        } progress_scope{runtime.progress};
         int prompt_tokens = media_paths.empty()
                 ? evaluate_text(runtime, prompt)
                 : evaluate_media(runtime, prompt, media_paths);
