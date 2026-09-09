@@ -416,7 +416,7 @@ public final class LocalHttpServer {
 
     private void authorize(HttpRequest request, String requestId) {
         JSONObject server = config.current().optJSONObject("server");
-        String key = server == null ? "" : server.optString("apiKey");
+        String key = server == null ? "test" : server.optString("apiKey", "test");
         if (key == null || key.isEmpty()) {
             events.info("request", requestId + " auth=disabled（未配置 API Key，直接放行）");
             return;

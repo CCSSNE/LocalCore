@@ -399,7 +399,7 @@ public final class LocalExchange {
         JSONObject result = new JSONObject();
         result.put("host", server.optString("host", "127.0.0.1"));
         result.put("port", server.optInt("port", 11434));
-        result.put("apiKey", server.optString("apiKey", ""));
+        result.put("apiKey", server.optString("apiKey", "test"));
         return result.toString();
     }
 
@@ -414,7 +414,7 @@ public final class LocalExchange {
         if (host.isEmpty()) throw new IllegalArgumentException("host 不能为空");
         int port = request.optInt("port", 11434);
         if (port < 1 || port > 65535) throw new IllegalArgumentException("port 必须是 1-65535");
-        String apiKey = request.optString("apiKey", "");
+        String apiKey = request.optString("apiKey", "test");
         if (request.has("apiKey") && !(request.opt("apiKey") instanceof String)) {
             throw new IllegalArgumentException("apiKey 必须是字符串，留空表示免鉴权");
         }
@@ -423,7 +423,7 @@ public final class LocalExchange {
         if (server == null) server = new JSONObject();
         server.put("host", host);
         server.put("port", port);
-        server.put("apiKey", apiKey == null ? "" : apiKey);
+        server.put("apiKey", apiKey == null ? "test" : apiKey);
         next.put("server", server);
         config.activate(next.toString());
         events.info("service", "后端服务设置已更新 host=" + host + " port=" + port

@@ -370,8 +370,8 @@ export default function App() {
   const [backendInfo, setBackendInfo] = useState<{running: boolean; address: string | null; error: string | null} | null>(null);
   const [backendError, setBackendError] = useState<string | null>(null);
   const [backendLoading, setBackendLoading] = useState(false);
-  const [serverForm, setServerForm] = useState({host: '127.0.0.1', port: '11434', apiKey: ''});
-  const [serverOrig, setServerOrig] = useState({host: '127.0.0.1', port: '11434', apiKey: ''});
+  const [serverForm, setServerForm] = useState({host: '127.0.0.1', port: '11434', apiKey: 'test'});
+  const [serverOrig, setServerOrig] = useState({host: '127.0.0.1', port: '11434', apiKey: 'test'});
   const chatScroll = useRef<ScrollView | null>(null);
   const logScroll = useRef<ScrollView | null>(null);
   const chatScrollSig = useRef<string>('');
@@ -698,7 +698,7 @@ export default function App() {
       const form = {
         host: String(server?.host ?? '127.0.0.1'),
         port: String(server?.port ?? '11434'),
-        apiKey: String(server?.apiKey ?? ''),
+        apiKey: String(server?.apiKey ?? 'test'),
       };
       setServerForm(form);
       setServerOrig(form);
