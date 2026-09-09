@@ -38,7 +38,6 @@ const ROUTES: Array<{key: RouteKey; title: string}> = [
   {key: 'core', title: '核心'},
   {key: 'model', title: '模型'},
   {key: 'download', title: '模型下载'},
-  {key: 'systemPrompt', title: 'System Prompt'},
   {key: 'backend', title: '后端'},
   {key: 'log', title: '日志'},
 ];
@@ -2171,6 +2170,9 @@ export default function App() {
             <Text style={[styles.drawerTitle, {textAlign: 'center', marginLeft: 0}]}>推理设置</Text>
             <TouchableOpacity style={[styles.btn, styles.clearBtn]} onPress={clearChat}>
               <Text>清空聊天记录</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[styles.btn, styles.clearBtn]} onPress={() => go('systemPrompt')}>
+              <Text>System Prompt</Text>
             </TouchableOpacity>
             <ScrollView style={styles.rightScroll}>
               {HOT_FIELDS.map(field => (
