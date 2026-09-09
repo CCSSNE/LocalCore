@@ -94,6 +94,22 @@ function fmtClock(d: Date): string {
   return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`;
 }
 
+// 解码进度同一套文案：测试页进度条与 API 日志共用，不再各写一份。
+const PROGRESS_LABELS: Record<string, string> = {
+  context_prepare: '正在准备文字',
+  image_prepare: '正在读取和预处理图片',
+  context: '正在解码文字',
+  image: '正在解码图片（视觉编码）',
+  image_context: '正在解码图片（上下文计算）',
+};
+
+function formatProgressLine(phase: string, done: number, total: number, elapsedMs: number): string {
+  const pct = total > 0 ? ` ${((done / total) * 100).toFixed(2)}%` : '';
+  const speedTxt = done > 0 && elapsedMs > 0 ? `${(done / (elapsedMs / 1000)).toFixed(2)}t/s` : '--';
+  const mspTxt = done > 0 && elapsedMs > 0 ? `${(elapsedMs / done).toFixed(2)}ms/t` : '--';
+  return `${PROGRESS_LABELS[phase] ?? phase} ${done}/${total}${pct} ${speedTxt} ${mspTxt}`;
+}
+
 function StatsStrip({stats}: {stats: TurnStats}) {
   const [open, setOpen] = useState(false);
   const head = `total-${fmtCount(stats.inT + stats.out)} ${fmtSpeed(stats.out, stats.llm)} ${fmtDur(stats.ttft)}`;
@@ -797,24 +813,50 @@ export default function App() {
       if (prefillComplete.current || !progress) return;
       const {phase, done, total} = progress;
       const elapsedMs = progress.elapsedMs + Date.now() - progress.receivedAt;
-      const labels: Record<string, string> = {
-        context_prepare: '正在准备文字',
-        image_prepare: '正在读取和预处理图片',
-        context: '正在解码文字',
-        image: '正在解码图片（视觉编码）',
-        image_context: '正在解码图片（上下文计算）',
-      };
-      const pct = total > 0 ? ` ${((done / total) * 100).toFixed(2)}%` : '';
-      const speedTxt = done > 0 && elapsedMs > 0 ? `${(done / (elapsedMs / 1000)).toFixed(2)}t/s` : '--';
-      const mspTxt = done > 0 && elapsedMs > 0 ? `${(elapsedMs / done).toFixed(2)}ms/t` : '--';
       const secTxt = progressT0.current > 0 ? `${((Date.now() - progressT0.current) / 1000).toFixed(1)}s` : '--';
-      const msg = `${labels[phase] ?? phase} ${done}/${total}${pct} ${speedTxt} ${mspTxt} ${secTxt}`;
+      const msg = `${formatProgressLine(phase, done, total, elapsedMs)} ${secTxt}`;
       setProgressMsg(msg);
     }, 100);
+    // API 请求（外部程序调后端）的实时转播：只写日志，不碰测试页的消息与进度 UI。
+    const apiTokenSub = chatEvents.addListener('LocalCoreApiToken', (event: any) => {
+      const piece = String(event?.piece ?? '');
+      if (!piece) return;
+      push('info', piece);
+    });
+    const apiStageSub = chatEvents.addListener('LocalCoreApiStage', (event: any) => {
+      const s = String(event?.stage ?? '');
+      if (!s) return;
+      const id = String(event?.requestId ?? '');
+      push('info', `·· [API${id ? ' ' + id : ''}] ${s}`);
+    });
+    const apiProgSub = chatEvents.addListener('LocalCoreApiProgress', (event: any) => {
+      const phase = String(event?.phase ?? '');
+      if (!phase) return;
+      const id = String(event?.requestId ?? '');
+      const msg = formatProgressLine(
+        phase,
+        Number(event?.done ?? 0),
+        Number(event?.total ?? 0),
+        Number(event?.elapsedMs ?? 0),
+      );
+      push('info', `·· [API${id ? ' ' + id : ''}] ${msg}`);
+    });
+    // 原生全量诊断（请求行/鉴权/完成行/运行时/服务启停）直达日志屏。
+    const eventLogSub = chatEvents.addListener('LocalCoreEventLog', (event: any) => {
+      const level = String(event?.level ?? 'info');
+      const component = String(event?.component ?? '');
+      const message = String(event?.message ?? '');
+      if (!message && !component) return;
+      push(level === 'error' ? 'fail' : 'info', component ? `[${component}] ${message}` : message);
+    });
     return () => {
       sub.remove();
       stageSub.remove();
       progSub.remove();
+      apiTokenSub.remove();
+      apiStageSub.remove();
+      apiProgSub.remove();
+      eventLogSub.remove();
       clearInterval(progressTimer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

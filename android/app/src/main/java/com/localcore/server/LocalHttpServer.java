@@ -1,6 +1,7 @@
 package com.localcore.server;
 
 import com.localcore.config.ConfigRepository;
+import com.localcore.diagnostics.ApiLogHub;
 import com.localcore.diagnostics.EventLog;
 import com.localcore.resource.ResourceManager;
 import com.localcore.resource.ResourceState;
@@ -242,6 +243,7 @@ public final class LocalHttpServer {
         // 语义日志：模型 + 流式与否 + 全量 OpenAI 请求体，前端对照时只看这一行就知道输入了什么。
         events.info("request", requestId + " chat model=" + modelId + " stream=" + stream
                 + " messages=" + messages + " body=" + request);
+        ApiMirrors mirrors = new ApiMirrors(requestId);
         String completionId = "chatcmpl-" + UUID.randomUUID();
         long created = System.currentTimeMillis() / 1000;
         if (stream) {
@@ -256,8 +258,11 @@ public final class LocalHttpServer {
                         } catch (JSONException error) {
                             throw new IllegalStateException("Invalid core event JSON", error);
                         }
+                        // 流式字同步抄一份到 APP 日志屏（只走内存转发，不写文件；失败也不影响响应）。
+                        String piece = readableChatPiece(token);
+                        if (!piece.isEmpty()) ApiLogHub.emitToken(requestId, piece);
                         return true;
-                    });
+                    }, mirrors.stages, null, mirrors.progress);
             if (!output.headersSent()) {
                 output.startEvents();
                 streamRole(output, completionId, created, modelId);
@@ -270,7 +275,13 @@ public final class LocalHttpServer {
                     + " ttftMs=" + result.ttftMs + " llmMs=" + result.llmMs
                     + " message=" + result.message + " text=" + result.text);
         } else {
-            RuntimeManager.Result result = runtime.chat(messages, request, null);
+            // 非流式也挂镜像消费：HTTP 只回完整结果，但 token 逐个抄到日志屏，便于对照。
+            RuntimeManager.Result result = runtime.chat(messages, request,
+                    (RuntimeManager.EventConsumer) token -> {
+                        String piece = readableChatPiece(token);
+                        if (!piece.isEmpty()) ApiLogHub.emitToken(requestId, piece);
+                        return true;
+                    }, mirrors.stages, null, mirrors.progress);
             JSONObject body = chatResult(completionId, created, modelId, result);
             output.json(200, body);
             events.info("request", "<-- " + requestId + " status=200 elapsedMs="
@@ -287,6 +298,7 @@ public final class LocalHttpServer {
         boolean stream = request.optBoolean("stream", false);
         events.info("request", requestId + " completion model=" + modelId + " stream=" + stream
                 + " prompt=" + prompt + " body=" + request);
+        ApiMirrors mirrors = new ApiMirrors(requestId);
         String completionId = "cmpl-" + UUID.randomUUID();
         long created = System.currentTimeMillis() / 1000;
         if (stream) {
@@ -294,8 +306,9 @@ public final class LocalHttpServer {
                     token -> {
                         if (!output.headersSent()) output.startEvents();
                         output.event(completionChunk(completionId, created, modelId, token, null).toString());
+                        if (token != null && !token.isEmpty()) ApiLogHub.emitToken(requestId, token);
                         return true;
-                    });
+                    }, mirrors.stages, null, mirrors.progress);
             if (!output.headersSent()) output.startEvents();
             output.event(completionChunk(completionId, created, modelId, "", result.finishReason).toString());
             output.event("[DONE]");
@@ -304,7 +317,11 @@ public final class LocalHttpServer {
                     + " promptTokens=" + result.promptTokens + " completionTokens=" + result.completionTokens
                     + " ttftMs=" + result.ttftMs + " llmMs=" + result.llmMs + " text=" + result.text);
         } else {
-            RuntimeManager.Result result = runtime.complete(prompt, request, null);
+            RuntimeManager.Result result = runtime.complete(prompt, request,
+                    token -> {
+                        if (token != null && !token.isEmpty()) ApiLogHub.emitToken(requestId, token);
+                        return true;
+                    }, mirrors.stages, null, mirrors.progress);
             JSONObject body = base(completionId, "text_completion", created, modelId);
             JSONArray choices = new JSONArray();
             JSONObject choice = new JSONObject();
@@ -319,6 +336,49 @@ public final class LocalHttpServer {
                     + (System.currentTimeMillis() - startedAt) + " completion model=" + modelId + " stream=false"
                     + " promptTokens=" + result.promptTokens + " completionTokens=" + result.completionTokens
                     + " ttftMs=" + result.ttftMs + " llmMs=" + result.llmMs + " body=" + body);
+        }
+    }
+
+    // 核心增量事件是 JSON（content / reasoning_content / tool_calls），日志屏只贴可读正文；
+    // 工具调用增量无正文时贴原始 JSON，保证调用过程不丢；解析失败一律跳过，绝不影响响应。
+    private static String readableChatPiece(String tokenJson) {
+        try {
+            JSONObject event = new JSONObject(tokenJson);
+            String content = event.optString("content", "");
+            String reasoning = event.optString("reasoning_content", "");
+            StringBuilder readable = new StringBuilder();
+            if (!content.isEmpty()) readable.append(content);
+            if (!reasoning.isEmpty()) readable.append(reasoning);
+            if (readable.length() > 0) return readable.toString();
+            if (event.has("tool_calls")) return tokenJson;
+            return "";
+        } catch (JSONException error) {
+            return "";
+        }
+    }
+
+    // API 推理的阶段与解码进度镜像：只走 ApiLogHub 内存转发，不写诊断文件。
+    // 进度按“换阶段 / 收尾 / 400ms”节流，避免 prefill 分片刷屏。
+    private static final class ApiMirrors {
+        final RuntimeManager.StageListener stages;
+        final RuntimeManager.Progress2Listener progress;
+        private String lastPhase = "";
+        private long lastEmitMs = 0;
+
+        ApiMirrors(String requestId) {
+            stages = stage -> {
+                if (stage != null && !stage.isEmpty()) ApiLogHub.emitStage(requestId, stage);
+            };
+            progress = (phase, doneTokens, totalTokens, elapsedMs) -> {
+                if (phase == null || phase.isEmpty()) return;
+                long now = System.currentTimeMillis();
+                boolean phaseChanged = !phase.equals(lastPhase);
+                boolean finished = totalTokens > 0 && doneTokens >= totalTokens;
+                if (!phaseChanged && !finished && now - lastEmitMs < 400) return;
+                lastPhase = phase;
+                lastEmitMs = now;
+                ApiLogHub.emitProgress(requestId, phase, doneTokens, totalTokens, elapsedMs);
+            };
         }
     }
 

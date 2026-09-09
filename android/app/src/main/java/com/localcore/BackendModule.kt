@@ -15,6 +15,8 @@ import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
 import com.facebook.react.modules.core.DeviceEventManagerModule
+import com.localcore.diagnostics.ApiLogHub
+import com.localcore.diagnostics.EventLog
 import com.localcore.runtime.RuntimeManager
 import com.localcore.runtime.RuntimeState
 import com.localcore.service.BackendService
@@ -26,6 +28,92 @@ class BackendModule(private val reactContext: ReactApplicationContext) :
 
   private val application: MainApplication
     get() = reactContext.applicationContext as MainApplication
+
+  // 原生 EventLog 与 API 流式内容直达 JS 日志屏的唯一转发点。
+  // 测试页走 LocalCoreChatToken/Stage/Progress，API 走 LocalCoreApi*/EventLog，互不污染对方 UI。
+  private val nativeEventListener = EventLog.Listener { event ->
+    try {
+      val payload = Arguments.createMap()
+      payload.putString("level", event.optString("level", "info"))
+      payload.putString("component", event.optString("component", ""))
+      payload.putString("message", event.optString("message", ""))
+      reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+          .emit("LocalCoreEventLog", payload)
+    } catch (ignored: Exception) {
+    }
+  }
+
+  private val apiHubListener = object : ApiLogHub.Listener {
+    override fun onApiToken(requestId: String, piece: String) {
+      try {
+        val payload = Arguments.createMap()
+        payload.putString("requestId", requestId)
+        payload.putString("piece", piece)
+        reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+            .emit("LocalCoreApiToken", payload)
+      } catch (ignored: Exception) {
+      }
+    }
+
+    override fun onApiStage(requestId: String, stage: String) {
+      try {
+        val payload = Arguments.createMap()
+        payload.putString("requestId", requestId)
+        payload.putString("stage", stage)
+        reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+            .emit("LocalCoreApiStage", payload)
+      } catch (ignored: Exception) {
+      }
+    }
+
+    override fun onApiProgress(requestId: String, phase: String, done: Int, total: Int, elapsedMs: Long) {
+      try {
+        val payload = Arguments.createMap()
+        payload.putString("requestId", requestId)
+        payload.putString("phase", phase)
+        payload.putInt("done", done)
+        payload.putInt("total", total)
+        payload.putDouble("elapsedMs", elapsedMs.toDouble())
+        reactContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+            .emit("LocalCoreApiProgress", payload)
+      } catch (ignored: Exception) {
+      }
+    }
+  }
+
+  private var forwardingEvents: EventLog? = null
+
+  private fun ensureLogForwarding() {
+    try {
+      val events = application.graph.events
+      synchronized(this) {
+        if (forwardingEvents !== events) {
+          try {
+            forwardingEvents?.removeListener(nativeEventListener)
+          } catch (_: Exception) {
+          }
+          try {
+            events.removeListener(nativeEventListener)
+          } catch (_: Exception) {
+          }
+          events.addListener(nativeEventListener)
+          forwardingEvents = events
+        }
+      }
+      ApiLogHub.setListener(apiHubListener)
+    } catch (_: Exception) {
+    }
+  }
+
+  override fun onCatalystInstanceDestroy() {
+    try {
+      forwardingEvents?.removeListener(nativeEventListener)
+    } catch (_: Exception) {
+    }
+    forwardingEvents = null
+    ApiLogHub.clearListener(apiHubListener)
+    super.onCatalystInstanceDestroy()
+  }
 
   private var pickPromise: Promise? = null
   private var savePromise: Promise? = null
@@ -177,6 +265,7 @@ class BackendModule(private val reactContext: ReactApplicationContext) :
 
   @ReactMethod
   fun chatStream(modelId: String, prompt: String, imageUriString: String?, maxImagePixels: Int?, promise: Promise) {
+    ensureLogForwarding()
     val images = if (imageUriString == null) emptyList() else listOf(imageUriString)
     runAsync(promise, "CHAT_FAILED") {
       streamChatWithUris(modelId, prompt, images, maxImagePixels)
@@ -185,6 +274,7 @@ class BackendModule(private val reactContext: ReactApplicationContext) :
 
   @ReactMethod
   fun chatStreamMulti(modelId: String, prompt: String, imageUris: ReadableArray?, maxImagePixels: Int?, promise: Promise) {
+    ensureLogForwarding()
     val images = mutableListOf<String>()
     if (imageUris != null) {
       for (i in 0 until imageUris.size()) {
@@ -696,6 +786,7 @@ class BackendModule(private val reactContext: ReactApplicationContext) :
 
   @ReactMethod
   fun getBackendState(promise: Promise) {
+    ensureLogForwarding()
     try {
       val graph = application.graph
       val state = org.json.JSONObject()
@@ -714,6 +805,7 @@ class BackendModule(private val reactContext: ReactApplicationContext) :
 
   @ReactMethod
   fun startService(promise: Promise) {
+    ensureLogForwarding()
     try {
       android.util.Log.i("LocalCoreBackend", "JS startService called(仅投递启动指令, 真正就绪看service分阶段日志)")
       requestNotificationPermissionIfNeeded()
