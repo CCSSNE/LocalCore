@@ -146,6 +146,18 @@
 - 用户单独说“编译”，先从 `D:\AI\LLM\LocalCore` 运行 `cmd /c yarn.cmd build:android:release` 进行 APK 增量编译；完成后按下一条规则判断核心是否需要重编，仅在证据确认需要时先告知用户具体差异，再自动编译核心并上传 `core-stable` Release，此条件流程属于本次“编译”的默认授权。
 - 核心是否需要重编，必须先以 `core-stable` 当前发布核心包内 `core.json` 记录的实际构建 commit 和哈希为基准，对比本次目标的核心构建输入（源码、ABI 头、上游及补丁、实际生效的构建配置与工具链），只有列出尚未包含在该产物中的有效差异才允许递增核心版本并重编；仅 APP/Loader 改动、版本号或提交指针变化不算核心差异，禁止用版本号提交、Release 标签指向或时间猜基准，证据不足或相互矛盾时先查清、纠正结论，不得靠重编代替核实。
 
+## 编译流程要高效
+
+1. 一次命令读取当前版本 + git status/diff/log。
+
+2. 版本 +0.0.1 → diff → commit → push。
+
+3. 立刻 APK 增量编译。
+
+4. APK 成功后，一个固定脚本一次性完成 core-stable 下载、hash/commit/输入差异比较。
+
+5. 有核心差异才 bump core → commit/push → build → upload → hash 校验。
+
 ## Windows 本地环境
 
 本机已经验证可复用的工具路径：
