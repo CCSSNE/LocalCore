@@ -29,7 +29,7 @@ const HOT_CONTROL_STATE_KEY = 'localcore.hot-control-values.v1';
 const DEFAULT_BUDGET_PX = 100000;
 const EMPTY_HOT_DEFINITION = JSON.stringify({controls: []}, null, 2);
 
-type RouteKey = 'chat' | 'core' | 'model' | 'download' | 'backend' | 'log';
+type RouteKey = 'chat' | 'core' | 'model' | 'download' | 'systemPrompt' | 'backend' | 'log';
 
 // 侧边栏顺序按用户要求：后端在日志上面，日志沉底。
 // 主屏叫测试：无上下文单轮，用完即走，不做复杂功能。
@@ -38,6 +38,7 @@ const ROUTES: Array<{key: RouteKey; title: string}> = [
   {key: 'core', title: '核心'},
   {key: 'model', title: '模型'},
   {key: 'download', title: '模型下载'},
+  {key: 'systemPrompt', title: 'System Prompt'},
   {key: 'backend', title: '后端'},
   {key: 'log', title: '日志'},
 ];
@@ -47,6 +48,7 @@ const TITLES: Record<RouteKey, string> = {
   core: '核心管理',
   model: '模型管理',
   download: '模型下载',
+  systemPrompt: 'System Prompt',
   backend: '后端服务',
   log: '日志',
 };
@@ -237,6 +239,7 @@ const DEFAULT_HOT: Record<string, any> = {
   topK: 40,
   seed: -1,
   stop: [],
+  system_prompt: '',
 };
 
 const hotToForm = (hot: Record<string, any>): Record<string, string> => {
@@ -334,6 +337,10 @@ export default function App() {
   const [hotForm, setHotForm] = useState<Record<string, string>>(hotToForm(DEFAULT_HOT));
   const [hotOrig, setHotOrig] = useState<Record<string, string>>(hotToForm(DEFAULT_HOT));
   const hotNums = useRef<Record<string, any>>({...DEFAULT_HOT});
+  const [systemPrompt, setSystemPrompt] = useState('');
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
+  const [settingsError, setSettingsError] = useState<string | null>(null);
+  const settingsWrites = useRef<Promise<void>>(Promise.resolve());
   const [stOrig, setStOrig] = useState<{form: Record<string, string>; loadJson: string; inferenceJson: string; tpl: string; ready: boolean}>({
     form: {},
     loadJson: '{}',
@@ -452,9 +459,15 @@ export default function App() {
   };
 
   const persistSettings = (px: number, hot: Record<string, any>) => {
-    AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify({imageBudgetPx: px, hot})).catch((e: any) =>
-      push('fail', 'FAIL 保存设置文件 => ' + (e?.message ?? String(e))),
-    );
+    const snapshot = JSON.stringify({imageBudgetPx: px, hot});
+    settingsWrites.current = settingsWrites.current
+      .then(() => AsyncStorage.setItem(SETTINGS_KEY, snapshot))
+      .then(() => setSettingsError(null))
+      .catch((e: any) => {
+        const message = '保存设置文件失败：' + (e?.message ?? String(e));
+        setSettingsError(message);
+        push('fail', message);
+      });
   };
 
   const persistHotControlValues = (values: HotControlValues) => {
@@ -489,9 +502,12 @@ export default function App() {
               if (Array.isArray(saved.hot.stop)) {
                 hot.stop = saved.hot.stop.filter((s: any) => typeof s === 'string');
               }
+              if (typeof saved.hot.system_prompt === 'string') {
+                hot.system_prompt = saved.hot.system_prompt;
+              }
             }
-          } catch {
-            push('fail', 'FAIL 读取设置文件 => 文件损坏，用默认值');
+          } catch (error: any) {
+            throw new Error('设置文件损坏：' + (error?.message ?? String(error)));
           }
         }
         setBudgetWan(String(Math.round(budget / 10000)));
@@ -499,8 +515,14 @@ export default function App() {
         setHotOrig(hotToForm(hot));
         applyBudgetPx(budget);
         applyHot(hot);
+        setSystemPrompt(hot.system_prompt);
+        setSettingsLoaded(true);
       })
-      .catch((e: any) => push('fail', 'FAIL 读取设置文件 => ' + (e?.message ?? String(e))));
+      .catch((e: any) => {
+        const message = '读取设置文件失败：' + (e?.message ?? String(e));
+        setSettingsError(message);
+        push('fail', message);
+      });
     Backend.getHotSettings()
       .then(async (raw: any) => {
         const text = String(raw ?? EMPTY_HOT_DEFINITION);
@@ -1272,7 +1294,7 @@ export default function App() {
 
   const closeRightDrawer = () => {
     setRightOpen(false);
-    const finalHot: Record<string, any> = {};
+    const finalHot: Record<string, any> = {...hotNums.current};
     const fixed: Record<string, string> = {};
     for (const field of HOT_FIELDS) {
       const value = checkNum(field.label, hotForm[field.key] ?? '', field.int);
@@ -1953,9 +1975,28 @@ export default function App() {
             ? renderModel()
             : route === 'download'
               ? <ModelDownloadScreen />
-              : route === 'backend'
-                ? renderBackend()
-                : renderLog()}
+              : route === 'systemPrompt'
+                ? <ScrollView style={styles.screen} contentContainerStyle={styles.screenContent} keyboardShouldPersistTaps="handled">
+                    <Text style={styles.hint}>全局默认系统提示词，输入后自动保存，后续请求生效。API 自带系统消息时优先使用 API 内容；留空则不添加默认提示词。</Text>
+                    <TextInput
+                      value={systemPrompt}
+                      editable={settingsLoaded}
+                      multiline
+                      placeholder={settingsLoaded ? '填写 System Prompt' : '正在读取设置…'}
+                      placeholderTextColor="#999999"
+                      style={[styles.settingsInput, styles.systemPromptInput]}
+                      onChangeText={text => {
+                        setSystemPrompt(text);
+                        const hot = {...hotNums.current, system_prompt: text};
+                        applyHot(hot);
+                        persistSettings(budgetPx, hot);
+                      }}
+                    />
+                    {settingsError ? <Text style={styles.logFail}>{settingsError}</Text> : null}
+                  </ScrollView>
+                : route === 'backend'
+                  ? renderBackend()
+                  : renderLog()}
 
       <Modal visible={drawerOpen} transparent animationType="fade" onRequestClose={() => setDrawerOpen(false)}>
         <Pressable style={styles.drawerMask} onPress={() => setDrawerOpen(false)}>
@@ -2227,6 +2268,7 @@ const styles = StyleSheet.create({
     textAlignVertical: 'center',
     includeFontPadding: false,
   },
+  systemPromptInput: {minHeight: 220, maxHeight: 480},
   extraHotInput: {
     flex: 1,
     borderWidth: 1,

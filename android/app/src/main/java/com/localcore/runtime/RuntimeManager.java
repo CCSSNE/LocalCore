@@ -422,8 +422,22 @@ public final class RuntimeManager {
         java.util.Iterator<String> keys = hot.keys();
         while (keys.hasNext()) {
             String configuredKey = keys.next();
+            if ("system_prompt".equals(configuredKey)) continue;
             putDefault(body, requestKey(configuredKey), hot.opt(configuredKey));
         }
+        if (!"chat".equals(body.optString("type"))) return;
+        JSONArray messages = body.getJSONArray("messages");
+        for (int i = 0; i < messages.length(); i++) {
+            String role = messages.getJSONObject(i).optString("role");
+            // 显式空系统消息也覆盖默认值；developer 是系统指令角色。
+            if ("system".equals(role) || "developer".equals(role)) return;
+        }
+        String systemPrompt = hot.optString("system_prompt", "");
+        if (systemPrompt.isEmpty()) return;
+        JSONArray withSystem = new JSONArray();
+        withSystem.put(new JSONObject().put("role", "system").put("content", systemPrompt));
+        for (int i = 0; i < messages.length(); i++) withSystem.put(messages.get(i));
+        body.put("messages", withSystem);
     }
 
     private static String requestKey(String key) {

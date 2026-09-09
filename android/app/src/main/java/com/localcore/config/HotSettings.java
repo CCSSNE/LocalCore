@@ -14,7 +14,7 @@ import java.util.Set;
 public final class HotSettings {
     public static final String CONFIG_KEY = "hotSettings";
     private static final Set<String> DEFAULT_KEYS = Collections.unmodifiableSet(new HashSet<>(Arrays.asList(
-            "max_tokens", "maxTokens", "temperature", "top_p", "topP", "top_k", "topK", "seed", "stop")));
+            "max_tokens", "maxTokens", "temperature", "top_p", "topP", "top_k", "topK", "seed", "stop", "system_prompt")));
 
     private HotSettings() {
     }
